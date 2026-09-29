@@ -3,7 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Extracteur de bilans biologiques</title>
+<title>Extracteur de bilans biologiques Orbis ⭕ v1.0</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  
 <style>
   :root{
     --bg:#F5F6F2;
@@ -104,6 +106,15 @@
         <h2 style="margin-top:0">Modèle de résumé</h2>
         <p class="hint">Écris ton modèle librement, avec tes propres phrases d'interprétation. Insère une valeur avec <code>{{Nom exact de l'examen}}</code> (valeur + unité), <code>{{Nom|valeur}}</code> (valeur seule) ou <code>{{Nom|date}}</code> (date du prélèvement utilisé). Clique un examen dans la liste à droite pour insérer son nom exact.</p>
         <textarea id="template-area"></textarea>
+        
+        <div class="row" style="margin-bottom: 10px;">
+          <label for="select-preset">Trame prédéfinie :</label>
+          <select id="select-preset" style="flex: 1;">
+            <option value="">-- Charger un modèle depuis la base --</option>
+          </select>
+          <button type="button" id="btn-save-cloud">💾 Partager ce modèle</button>
+        </div>
+        
         <div class="row">
           <label class="opt">Date de référence :
             <select id="ref-date"></select>
@@ -125,6 +136,12 @@
 </div>
 
 <script>
+const SUPABASE_URL = 'https://yseaujinbdwxpcelsywr.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_7uC727-tO92zxGsAwCqBnA_E9oX_Xw8';
+const _supabase = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+  db: { schema: 'neurotools' }
+});
+  
 /* ============================================================================
    CONFIGURATION — à adapter selon le format des comptes-rendus rencontrés.
    ============================================================================ */
@@ -440,6 +457,98 @@ function generateSummary(){
   const warn = document.getElementById('missing-warn');
   warn.textContent = missing.length ? 'Non trouvés : ' + missing.join(', ') : '';
 }
+
+/* ============================================================================
+   GESTION TEMPLATE
+   ============================================================================ */
+// 1. Récupérer tous les templates
+async function fetchTemplates() {
+  const { data, error } = await supabaseClient
+    .from('templates')
+    .select('*')
+    .order('is_default', { ascending: false }) // Les templates par défaut en premier
+    .order('title', { ascending: true });
+
+  if (error) {
+    console.error("Erreur de chargement des templates :", error);
+    return [];
+  }
+  return data;
+}
+
+// 2. Sauvegarder un nouveau template (ou écraser l'existant)
+async function saveTemplate(title, content, isDefault = false, author = 'Anonyme') {
+  const { data, error } = await supabaseClient
+    .from('templates')
+    .insert([
+      { title, content, is_default: isDefault, author }
+    ])
+    .select();
+
+  if (error) {
+    alert("Erreur lors de la sauvegarde : " + error.message);
+  } else {
+    alert("Template sauvegardé avec succès !");
+  }
+}
+
+// 3. Basculer un template en "par défaut" (pour le prototype)
+async function setAsDefaultTemplate(templateId, status) {
+  const { error } = await supabaseClient
+    .from('templates')
+    .update({ is_default: status })
+    .eq('id', templateId);
+
+  if (error) console.error("Erreur de mise à jour :", error);
+}
+
+/* ============================================================================
+   INTERFACE & SUPABASE PRESETS
+   ============================================================================ */
+
+// 1. Déclaration de la fonction
+async function initPresetDropdown() {
+  const select = document.getElementById('select-preset');
+  if (!select) return;
+  
+  const templates = await fetchTemplates();
+
+  select.innerHTML = '<option value="">-- Charger un modèle --</option>';
+  
+  templates.forEach(tpl => {
+    const opt = document.createElement('option');
+    opt.value = tpl.id;
+    opt.textContent = `${tpl.is_default ? '⭐ ' : ''}${tpl.title} (${tpl.author || 'Anonyme'})`;
+    opt.dataset.content = tpl.content;
+    select.appendChild(opt);
+  });
+}
+
+// 2. Initialisation au chargement de la page
+window.addEventListener('DOMContentLoaded', () => {
+  initPresetDropdown();
+});
+
+// 3. Écouteurs d'événements
+document.getElementById('select-preset')?.addEventListener('change', (e) => {
+  const selectedOpt = e.target.options[e.target.selectedIndex];
+  if (selectedOpt && selectedOpt.dataset.content) {
+    document.getElementById('template-area').value = selectedOpt.dataset.content;
+  }
+});
+
+document.getElementById('btn-save-cloud')?.addEventListener('click', async () => {
+  const content = document.getElementById('template-area').value;
+  if (!content.trim()) return alert("Le modèle est vide.");
+
+  const title = prompt("Titre de la trame :", "Nouveau modèle");
+  if (!title) return;
+
+  const isDefault = confirm("Définir comme modèle par défaut pour tout le monde ?");
+
+  await saveTemplate(title, content, isDefault);
+  await initPresetDropdown(); // Rafraîchit le menu
+});
 
 /* ============================================================================
    EXPORT
