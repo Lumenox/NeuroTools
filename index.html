@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Extracteur de bilans biologiques</title>
+<style>
+  :root{
+    --bg:#F5F6F2;
+    --surface:#FFFFFF;
+    --ink:#1A2420;
+    --ink-soft:#5B655F;
+    --line:#DFE3DB;
+    --accent:#146B5C;
+    --accent-soft:#E4EFEC;
+    --high:#B3402A;
+    --high-bg:#FBEAE6;
+    --low:#2B5FA6;
+    --low-bg:#E9F0F9;
+    --mono: ui-monospace, "SF Mono", "IBM Plex Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, "Segoe UI", system-ui, Roboto, sans-serif;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);font-family:var(--sans);}
+  body{padding:28px 32px 60px;}
+  h1{font-size:22px;margin:0 0 2px;letter-spacing:-0.01em;}
+  .subtitle{color:var(--ink-soft);font-size:13.5px;margin:0 0 22px;max-width:640px;line-height:1.5;}
+  .panel{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:18px 20px;margin-bottom:18px;}
+  .panel h2{font-size:13px;text-transform:none;font-weight:600;margin:0 0 10px;color:var(--ink);}
+  textarea{width:100%;font-family:var(--mono);font-size:12px;line-height:1.5;border:1px solid var(--line);border-radius:4px;padding:10px;resize:vertical;background:#FCFCFB;color:var(--ink);}
+  #raw-input{height:170px;}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px;}
+  button{font-family:var(--sans);font-size:13px;border:1px solid var(--line);background:var(--surface);color:var(--ink);padding:7px 14px;border-radius:4px;cursor:pointer;}
+  button:hover{border-color:var(--accent);}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600;}
+  button.primary:hover{opacity:.9;}
+  button:disabled{opacity:.45;cursor:not-allowed;}
+  label.opt{font-size:12.5px;color:var(--ink-soft);display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;}
+  .stats{font-size:12.5px;color:var(--ink-soft);margin-top:8px;}
+  #result-area{display:none;}
+  .tabs{display:flex;gap:4px;margin-bottom:0;}
+  .tabs button{border-radius:4px 4px 0 0;border-bottom:none;background:var(--accent-soft);color:var(--ink-soft);}
+  .tabs button.active{background:var(--surface);color:var(--ink);font-weight:600;}
+  .tabpanel{border:1px solid var(--line);border-radius:0 4px 4px 4px;background:var(--surface);padding:16px;}
+  .hidden{display:none !important;}
+  .table-controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px;}
+  input[type=text]{font-family:var(--sans);font-size:13px;padding:6px 10px;border:1px solid var(--line);border-radius:4px;min-width:220px;}
+  .table-wrap{overflow:auto;max-height:70vh;border:1px solid var(--line);border-radius:4px;}
+  table{border-collapse:collapse;font-size:12px;white-space:nowrap;}
+  th,td{border-bottom:1px solid var(--line);border-right:1px solid var(--line);padding:5px 9px;text-align:right;}
+  th{position:sticky;top:0;background:#F0F1EC;font-weight:600;text-align:center;z-index:2;}
+  td.label,th.label{text-align:left;white-space:normal;max-width:260px;position:sticky;left:0;background:var(--surface);z-index:1;font-family:var(--sans);}
+  th.label{background:#F0F1EC;z-index:3;}
+  tr.section-row td{background:var(--accent-soft);font-weight:600;color:var(--accent);position:sticky;left:0;}
+  td.val{font-family:var(--mono);}
+  td.flag-high{background:var(--high-bg);color:var(--high);}
+  td.flag-low{background:var(--low-bg);color:var(--low);}
+  .cat{color:var(--ink-soft);font-size:10.5px;display:block;}
+  #template-area{height:260px;}
+  #summary-output{height:260px;background:#FCFCFB;}
+  .insert-list{max-height:260px;overflow:auto;border:1px solid var(--line);border-radius:4px;}
+  .insert-list button{display:block;width:100%;text-align:left;border:none;border-bottom:1px solid var(--line);border-radius:0;background:none;font-size:12px;padding:6px 10px;}
+  .insert-list button:hover{background:var(--accent-soft);}
+  .cols-2{display:grid;grid-template-columns:1fr 300px;gap:16px;}
+  .warn{font-size:12px;color:var(--high);margin-top:8px;}
+  .hint{font-size:11.5px;color:var(--ink-soft);margin-top:6px;}
+  select{font-family:var(--sans);font-size:13px;padding:6px 8px;border:1px solid var(--line);border-radius:4px;}
+</style>
+</head>
+<body>
+
+<h1>Extracteur de bilans biologiques</h1>
+<p class="subtitle">Colle un copier-coller de compte-rendu de biologie standardisé : l'outil extrait chaque examen avec ses valeurs successives, construit un tableau examen × date, et permet d'insérer les valeurs dans un modèle de résumé de type courrier. Tout se passe dans le navigateur, rien n'est envoyé où que ce soit.</p>
+
+<div class="panel">
+  <h2>1. Coller le compte-rendu</h2>
+  <textarea id="raw-input" placeholder="Coller ici le texte copié depuis le dossier biologique…"></textarea>
+  <div class="row">
+    <button class="primary" id="btn-parse">Analyser</button>
+    <label class="opt"><input type="checkbox" id="chk-technical" checked> Masquer les lignes techniques (PDF, identité biologiste, prélèvement…)</label>
+    <label class="opt"><input type="checkbox" id="chk-order"> Ordre chronologique (plus ancien → plus récent)</label>
+  </div>
+  <div class="stats" id="stats"></div>
+</div>
+
+<div id="result-area">
+  <div class="tabs">
+    <button id="tab-btn-table" class="active">Tableau</button>
+    <button id="tab-btn-resume">Résumé</button>
+  </div>
+
+  <div class="tabpanel" id="tab-table">
+    <div class="table-controls">
+      <input type="text" id="search" placeholder="Filtrer un examen (ex : sodium, DFG, CRP…)">
+      <button id="btn-csv">Télécharger CSV</button>
+      <button id="btn-copy-table">Copier le tableau (coller dans Excel)</button>
+    </div>
+    <div class="table-wrap"><table id="data-table"></table></div>
+  </div>
+
+  <div class="tabpanel hidden" id="tab-resume">
+    <div class="cols-2">
+      <div>
+        <h2 style="margin-top:0">Modèle de résumé</h2>
+        <p class="hint">Écris ton modèle librement, avec tes propres phrases d'interprétation. Insère une valeur avec <code>{{Nom exact de l'examen}}</code> (valeur + unité), <code>{{Nom|valeur}}</code> (valeur seule) ou <code>{{Nom|date}}</code> (date du prélèvement utilisé). Clique un examen dans la liste à droite pour insérer son nom exact.</p>
+        <textarea id="template-area"></textarea>
+        <div class="row">
+          <label class="opt">Date de référence :
+            <select id="ref-date"></select>
+          </label>
+          <button class="primary" id="btn-generate">Générer le résumé</button>
+        </div>
+        <div id="missing-warn" class="warn"></div>
+        <h2>Résultat</h2>
+        <textarea id="summary-output" readonly></textarea>
+        <div class="row"><button id="btn-copy-summary">Copier le résumé</button></div>
+      </div>
+      <div>
+        <h2 style="margin-top:0">Examens disponibles</h2>
+        <input type="text" id="search-insert" placeholder="Filtrer…" style="width:100%;margin-bottom:8px;">
+        <div class="insert-list" id="insert-list"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ============================================================================
+   CONFIGURATION — à adapter selon le format des comptes-rendus rencontrés.
+   ============================================================================ */
+
+// Caractères de chiffres en exposant utilisés par les renvois de note de bas
+// de page (ex : "DFG calculé par C…¹" renvoie vers "¹ DFG calculé par CKD-EPI").
+const SUPERSCRIPTS = {'⁰':'0','¹':'1','²':'2','³':'3','⁴':'4','⁵':'5','⁶':'6','⁷':'7','⁸':'8','⁹':'9'};
+
+// Motifs (regex, sur le libellé résolu) considérés comme des lignes "techniques"
+// et non des résultats biologiques : à compléter librement.
+const IGNORE_LABEL_PATTERNS = [
+  /^CR( - Pdf| Plateforme| Microbiologie)/i,
+  /^Identit[ée] biologiste/i,
+  /^Compte globules/i,
+  /^Nature de la prescription/i,
+  /^Nature du pr[ée]l[èe]vement/i,
+  /^Envoi dans le serveur/i,
+  /^Site destinataire/i,
+  /^Attestation retour/i,
+  /^Accus[ée] de r[ée]ception/i,
+  /^Motif$/i,
+];
+
+// Corrections cosmétiques d'unités tronquées par la largeur de colonne
+// (la troncature ne porte, dans ce cas, sur aucune note de bas de page).
+const UNIT_FIXES = {
+  'mL/min/…': 'mL/min/1.73m²',
+};
+
+/* ============================================================================
+   MOTEUR DE PARSING
+   ============================================================================ */
+
+const DATE_RE = /^\d{2}\/\d{2}\/\d{2}$/;
+const TIME_RE = /^\d{2}:\d{2}$/;
+const FOOTNOTE_LINE_RE = /^([⁰¹²³⁴⁵⁶⁷⁸⁹]+)\s+(.*)$/;
+const TRAILING_FOOTNOTE_RE = /…([⁰¹²³⁴⁵⁶⁷⁸⁹]+)\s*$/;
+
+function supToDigits(s){ return s.split('').map(c => SUPERSCRIPTS[c] || '').join(''); }
+
+function isAllCaps(s){
+  const letters = s.replace(/[^A-Za-zÀ-ÿ]/g, '');
+  return letters.length > 1 && letters === letters.toUpperCase();
+}
+
+function isIgnoredLabel(label){
+  return IGNORE_LABEL_PATTERNS.some(re => re.test(label));
+}
+
+// Résout un libellé ou une valeur tronqués par un renvoi de note de bas de page.
+function resolveFootnote(text, footnotes){
+  const m = text.match(TRAILING_FOOTNOTE_RE);
+  if (!m) return text;
+  const digits = supToDigits(m[1]);
+  let resolved = null;
+  for (const d of digits) if (footnotes[d]) resolved = footnotes[d];
+  return resolved !== null ? resolved : text.replace(TRAILING_FOOTNOTE_RE, '');
+}
+
+/**
+ * Analyse le texte collé et renvoie :
+ *  - exams: Map(libellé -> { section, sub, values: Map(dateKey -> {value, flag, unit, ref}) })
+ *  - dateKeys: liste des dates/heures rencontrées, triées chronologiquement
+ */
+function parseReport(text){
+  const cleanLines = text.split(/\r?\n/).map(l => l.replace(/\r$/, ''));
+
+  // Découpage en blocs (un bloc = un compte-rendu d'examen, entre deux lignes de soulignés).
+  // Les renvois de note de bas de page sont numérotés par bloc : on les résout donc
+  // en deux passes, bloc par bloc, pour pouvoir référencer une note définie plus bas.
+  const blocks = [];
+  let cur = [];
+  for (const l of cleanLines){
+    if (/^_{10,}$/.test(l.trim())){
+      if (cur.length) blocks.push(cur);
+      cur = [];
+    } else {
+      cur.push(l);
+    }
+  }
+  if (cur.length) blocks.push(cur);
+
+  const exams = new Map();
+  const dateKeySet = new Set();
+
+  // La date, l'heure et la rubrique/sous-rubrique courantes se poursuivent
+  // d'un bloc au suivant : un même compte-rendu est en réalité scindé en un
+  // bloc d'en-tête (date/heure) puis un bloc de données par la ligne de
+  // séparation qui les sépare. Seules les notes de bas de page sont propres
+  // à chaque bloc (leur numérotation recommence à chaque fois).
+  let currentDate = null, currentTime = null;
+  let currentSection = '', currentSub = '';
+
+  for (const blockLines of blocks){
+    // Passe 1 : collecte des notes de bas de page du bloc.
+    const footnotes = {};
+    for (const raw of blockLines){
+      const t = raw.trim();
+      if (t.includes('¦')) continue;
+      const m = t.match(FOOTNOTE_LINE_RE);
+      if (m){
+        const digits = supToDigits(m[1]);
+        for (const d of digits) footnotes[d] = m[2];
+      }
+    }
+
+    // Passe 2 : extraction des données du bloc.
+    for (const raw of blockLines){
+      const trimmed = raw.trim();
+      if (!trimmed) continue;
+
+      if (trimmed.includes('¦')){
+        const fields = raw.split('¦').map(f => f.trim());
+
+        // Ligne d'en-tête du bloc (identifiant, date, "Valeurs de") : capture la date.
+        let isDateHeader = false;
+        for (const f of fields) if (DATE_RE.test(f)) { currentDate = f; isDateHeader = true; }
+        if (isDateHeader) continue;
+
+        // Ligne d'en-tête de colonnes ("Analyse | Unité | 06:00 | réf.") : capture l'heure.
+        if (fields[0] === 'Analyse' || fields[1] === 'Unité' || fields[2] === 'Complet'){
+          for (const f of fields) if (TIME_RE.test(f)) currentTime = f;
+          continue;
+        }
+
+        let label = fields[0] || '';
+        let unit = fields[1] || '';
+        let valueRaw = fields[2] || '';
+        let ref = fields[3] || '';
+        if (!label) continue;
+
+        label = resolveFootnote(label, footnotes);
+        if (isIgnoredLabel(label)) continue;
+
+        // Séparation valeur / drapeau anormal ("+"/"-" isolé en fin de champ).
+        let flag = null;
+        const fm = valueRaw.match(/^(.*\S)\s+([+-])$/);
+        if (fm){ valueRaw = fm[1]; flag = fm[2]; }
+        valueRaw = resolveFootnote(valueRaw.trim(), footnotes).trim();
+        if (!valueRaw) continue;
+
+        unit = UNIT_FIXES[unit] || unit;
+
+        const dateKey = currentDate ? (currentDate + (currentTime ? ' ' + currentTime : '')) : 'Date inconnue';
+        dateKeySet.add(dateKey);
+
+        if (!exams.has(label)) exams.set(label, { section: currentSection, sub: currentSub, values: new Map() });
+        exams.get(label).values.set(dateKey, { value: valueRaw, flag, unit, ref });
+        continue;
+      }
+
+      // Note de bas de page : déjà collectée en passe 1, on l'ignore ici.
+      if (FOOTNOTE_LINE_RE.test(trimmed)) continue;
+
+      // Heuristique de repérage des titres de rubrique / sous-rubrique.
+      const wordCount = trimmed.split(/\s+/).length;
+      if (trimmed.length < 60 && wordCount <= 6 && !/[.,]$/.test(trimmed)){
+        if (isAllCaps(trimmed)){ currentSection = trimmed; currentSub = ''; }
+        else { currentSub = trimmed; }
+      }
+    }
+  }
+
+  // Tri chronologique des dates (format dd/mm/yy [hh:mm]).
+  function toSortableDate(key){
+    const m = key.match(/^(\d{2})\/(\d{2})\/(\d{2})(?:\s+(\d{2}):(\d{2}))?/);
+    if (!m) return 0;
+    const [, dd, mm, yy, hh, mi] = m;
+    return new Date(2000 + (+yy), (+mm) - 1, +dd, +(hh||0), +(mi||0)).getTime();
+  }
+  const dateKeys = [...dateKeySet].sort((a,b) => toSortableDate(a) - toSortableDate(b));
+
+  return { exams, dateKeys };
+}
+
+/* ============================================================================
+   ÉTAT ET RENDU
+   ============================================================================ */
+
+let PARSED = null; // { exams, dateKeys }
+
+function normalizeForMatch(s){
+  return s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+}
+
+function findExamByName(name){
+  const target = normalizeForMatch(name);
+  if (!PARSED) return null;
+  for (const [label, data] of PARSED.exams) if (normalizeForMatch(label) === target) return { label, data };
+  return null;
+}
+
+function orderedDateKeys(){
+  const asc = PARSED.dateKeys;
+  return document.getElementById('chk-order').checked ? asc : [...asc].reverse();
+}
+
+function visibleExams(){
+  const hideTech = document.getElementById('chk-technical').checked; // déjà filtré au parsing ; conservé pour usage futur
+  const q = normalizeForMatch(document.getElementById('search').value || '');
+  const out = [];
+  for (const [label, data] of PARSED.exams){
+    if (q && !normalizeForMatch(label).includes(q) && !normalizeForMatch(data.section+' '+data.sub).includes(q)) continue;
+    out.push([label, data]);
+  }
+  // Regroupement par section/sous-section, dans l'ordre de première apparition.
+  const order = [];
+  const seen = new Set();
+  for (const [label, data] of out){
+    const key = data.section + '||' + data.sub;
+    if (!seen.has(key)){ seen.add(key); order.push(key); }
+  }
+  out.sort((a,b) => order.indexOf(a[1].section+'||'+a[1].sub) - order.indexOf(b[1].section+'||'+b[1].sub));
+  return out;
+}
+
+function buildTable(){
+  const table = document.getElementById('data-table');
+  const dates = orderedDateKeys();
+  const exams = visibleExams();
+
+  let html = '<thead><tr><th class="label">Examen</th>';
+  for (const d of dates) html += `<th>${d}</th>`;
+  html += '</tr></thead><tbody>';
+
+  let lastGroup = null;
+  for (const [label, data] of exams){
+    const group = data.section + (data.sub ? ' — ' + data.sub : '');
+    if (group !== lastGroup){
+      html += `<tr class="section-row"><td colspan="${dates.length+1}">${group || '(non classé)'}</td></tr>`;
+      lastGroup = group;
+    }
+    html += `<tr><td class="label">${label}</td>`;
+    for (const d of dates){
+      const entry = data.values.get(d);
+      if (!entry){ html += '<td></td>'; continue; }
+      const cls = entry.flag === '+' ? 'flag-high' : (entry.flag === '-' ? 'flag-low' : '');
+      const title = entry.ref ? `Réf. : ${entry.ref}` : '';
+      html += `<td class="val ${cls}" title="${title}">${entry.value}${entry.unit ? ' '+entry.unit : ''}</td>`;
+    }
+    html += '</tr>';
+  }
+  html += '</tbody>';
+  table.innerHTML = html;
+}
+
+function buildInsertList(){
+  const list = document.getElementById('insert-list');
+  const q = normalizeForMatch(document.getElementById('search-insert').value || '');
+  let html = '';
+  for (const [label, data] of PARSED.exams){
+    if (q && !normalizeForMatch(label).includes(q)) continue;
+    html += `<button type="button" data-label="${label.replace(/"/g,'&quot;')}"><span class="cat">${data.section}${data.sub ? ' — '+data.sub : ''}</span>${label}</button>`;
+  }
+  list.innerHTML = html;
+  list.querySelectorAll('button').forEach(btn => {
+    btn.addEventListener('click', () => insertAtCursor(document.getElementById('template-area'), '{{'+btn.dataset.label+'}}'));
+  });
+}
+
+function buildRefDateSelect(){
+  const sel = document.getElementById('ref-date');
+  const dates = [...PARSED.dateKeys].reverse(); // plus récent en premier
+  sel.innerHTML = dates.map(d => `<option value="${d}">${d}</option>`).join('');
+}
+
+function insertAtCursor(textarea, text){
+  const start = textarea.selectionStart, end = textarea.selectionEnd;
+  textarea.value = textarea.value.slice(0, start) + text + textarea.value.slice(end);
+  textarea.focus();
+  textarea.selectionStart = textarea.selectionEnd = start + text.length;
+}
+
+/* ============================================================================
+   GÉNÉRATION DU RÉSUMÉ
+   ============================================================================ */
+
+function toSortableDate(key){
+  const m = key.match(/^(\d{2})\/(\d{2})\/(\d{2})(?:\s+(\d{2}):(\d{2}))?/);
+  if (!m) return 0;
+  const [, dd, mm, yy, hh, mi] = m;
+  return new Date(2000 + (+yy), (+mm) - 1, +dd, +(hh||0), +(mi||0)).getTime();
+}
+
+// Pour un examen donné, renvoie l'entrée à la date de référence choisie, ou à
+// défaut la valeur disponible la plus proche antérieure à cette date.
+function valueAtOrBefore(data, refDateKey){
+  const refTime = toSortableDate(refDateKey);
+  let best = null, bestTime = -Infinity;
+  for (const [dk, entry] of data.values){
+    const t = toSortableDate(dk);
+    if (t <= refTime && t > bestTime){ best = { ...entry, date: dk }; bestTime = t; }
+  }
+  return best;
+}
+
+function generateSummary(){
+  const template = document.getElementById('template-area').value;
+  const refDate = document.getElementById('ref-date').value;
+  const missing = [];
+
+  const result = template.replace(/\{\{\s*([^}|]+?)\s*(?:\|\s*(valeur|date)\s*)?\}\}/g, (whole, name, mode) => {
+    const found = findExamByName(name);
+    if (!found){ missing.push(name); return whole; }
+    const entry = valueAtOrBefore(found.data, refDate);
+    if (!entry){ missing.push(name + ' (aucune valeur ≤ date choisie)'); return whole; }
+    if (mode === 'valeur') return entry.value;
+    if (mode === 'date') return entry.date;
+    return entry.value + (entry.unit ? ' ' + entry.unit : '');
+  });
+
+  document.getElementById('summary-output').value = result;
+  const warn = document.getElementById('missing-warn');
+  warn.textContent = missing.length ? 'Non trouvés : ' + missing.join(', ') : '';
+}
+
+/* ============================================================================
+   EXPORT
+   ============================================================================ */
+
+function exportCSV(){
+  const dates = orderedDateKeys();
+  const exams = visibleExams();
+  const rows = [['Rubrique', 'Sous-rubrique', 'Examen', 'Unité', 'Référence', ...dates]];
+  for (const [label, data] of exams){
+    const unit = [...data.values.values()].find(v => v.unit)?.unit || '';
+    const ref = [...data.values.values()].find(v => v.ref)?.ref || '';
+    rows.push([data.section, data.sub, label, unit, ref, ...dates.map(d => data.values.get(d)?.value ?? '')]);
+  }
+  const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(';')).join('\n');
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'bilan_biologique.csv';
+  a.click();
+}
+
+function copyTableAsTSV(){
+  const dates = orderedDateKeys();
+  const exams = visibleExams();
+  const rows = [['Examen', ...dates]];
+  for (const [label, data] of exams) rows.push([label, ...dates.map(d => data.values.get(d)?.value ?? '')]);
+  const tsv = rows.map(r => r.join('\t')).join('\n');
+  navigator.clipboard.writeText(tsv);
+}
+
+/* ============================================================================
+   INTERFACE
+   ============================================================================ */
+
+document.getElementById('btn-parse').addEventListener('click', () => {
+  const text = document.getElementById('raw-input').value;
+  if (!text.trim()) return;
+  PARSED = parseReport(text);
+  document.getElementById('result-area').style.display = 'block';
+  document.getElementById('stats').textContent =
+    `${PARSED.exams.size} examens distincts, ${PARSED.dateKeys.length} prélèvements datés.`;
+  buildTable();
+  buildInsertList();
+  buildRefDateSelect();
+
+  if (!document.getElementById('template-area').value.trim()){
+    document.getElementById('template-area').value =
+`NFS :
+Absence de troubles de la coagulation
+Ionogramme sanguin et bilan hépatique dans les normes
+Créatinine à {{Créatinine|valeur}} µmol/L soit DFG à {{DFG calculé par CKD-EPI|valeur}} mL/min
+Absence de syndrome inflammatoire biologique
+CPK dans les normes`;
+  }
+});
+
+document.getElementById('chk-technical').addEventListener('change', () => { if (PARSED) buildTable(); });
+document.getElementById('chk-order').addEventListener('change', () => { if (PARSED) buildTable(); });
+document.getElementById('search').addEventListener('input', () => { if (PARSED) buildTable(); });
+document.getElementById('search-insert').addEventListener('input', () => { if (PARSED) buildInsertList(); });
+document.getElementById('btn-csv').addEventListener('click', exportCSV);
+document.getElementById('btn-copy-table').addEventListener('click', copyTableAsTSV);
+document.getElementById('btn-generate').addEventListener('click', generateSummary);
+document.getElementById('btn-copy-summary').addEventListener('click', () => navigator.clipboard.writeText(document.getElementById('summary-output').value));
+
+document.getElementById('tab-btn-table').addEventListener('click', () => {
+  document.getElementById('tab-btn-table').classList.add('active');
+  document.getElementById('tab-btn-resume').classList.remove('active');
+  document.getElementById('tab-table').classList.remove('hidden');
+  document.getElementById('tab-resume').classList.add('hidden');
+});
+document.getElementById('tab-btn-resume').addEventListener('click', () => {
+  document.getElementById('tab-btn-resume').classList.add('active');
+  document.getElementById('tab-btn-table').classList.remove('active');
+  document.getElementById('tab-resume').classList.remove('hidden');
+  document.getElementById('tab-table').classList.add('hidden');
+});
+</script>
+</body>
+</html>
