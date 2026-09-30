@@ -111,7 +111,7 @@
     <div class="table-wrap"><table id="data-table"></table></div>
   </div>
     
-<!--
+
   <div class="tabpanel hidden" id="tab-list">
     <div class="table-controls">
       <input type="text" id="search-list" placeholder="Filtrer un examen (ex : sodium, DFG, CRP…)">
@@ -124,7 +124,7 @@
     <p class="hint">Une ligne par examen, à la date choisie (ou la valeur disponible la plus proche antérieure). Pratique comme base brute avant de rédiger, sans passer par un modèle.</p>
     <textarea id="list-output" readonly style="height:60vh"></textarea>
   </div>
-!-->
+
     
   <div class="tabpanel hidden" id="tab-resume">
     <div class="cols-2">
@@ -142,9 +142,11 @@
         </div>
         
         <div class="row">
+          <!--
           <label class="opt">Date de référence :
             <select id="ref-date"></select>
           </label>
+          !-->
           <button class="primary" id="btn-generate">Générer le résumé</button>
         </div>
         <div id="missing-warn" class="warn"></div>
@@ -729,11 +731,13 @@ document.getElementById('btn-copy-table').addEventListener('click', copyTableAsT
 document.getElementById('btn-generate').addEventListener('click', generateSummary);
 document.getElementById('btn-copy-summary').addEventListener('click', () => navigator.clipboard.writeText(document.getElementById('summary-output').value));
 
+//
 document.getElementById('search-list').addEventListener('input', () => { if (PARSED) buildCompactList(); });
 document.getElementById('ref-date-list').addEventListener('change', () => { if (PARSED) buildCompactList(); });
 document.getElementById('chk-list-norms').addEventListener('change', () => { if (PARSED) buildCompactList(); });
 document.getElementById('btn-copy-list').addEventListener('click', () => navigator.clipboard.writeText(document.getElementById('list-output').value));
-
+//
+  
 // Bascule entre les trois onglets (Tableau / Liste / Résumé).
 const TABS = [
   { btn: 'tab-btn-table', panel: 'tab-table' },
