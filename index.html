@@ -85,7 +85,17 @@
   <div class="stats" id="stats"></div>
 </div>
 
-<div id="result-area">
+  <div id="result-area">
+    <div class="panel" id="scope-panel" style="display:none">  
+    <h2>Période affichée</h2>
+    <div class="row">
+      <label class="opt">Date de référence :
+        <select id="scope-date"></select>
+      </label>
+      <label class="opt"><input type="checkbox" id="chk-scope-from"> À partir de cette date</label>
+      <label class="opt"><input type="checkbox" id="chk-scope-latest"> Ne garder que le plus récent</label>
+    </div>
+  </div>
   <div class="tabs">
     <button id="tab-btn-table" class="active">Tableau</button>
     <button id="tab-btn-list">Liste</button>
@@ -100,7 +110,8 @@
     </div>
     <div class="table-wrap"><table id="data-table"></table></div>
   </div>
-
+    
+/*
   <div class="tabpanel hidden" id="tab-list">
     <div class="table-controls">
       <input type="text" id="search-list" placeholder="Filtrer un examen (ex : sodium, DFG, CRP…)">
@@ -113,7 +124,8 @@
     <p class="hint">Une ligne par examen, à la date choisie (ou la valeur disponible la plus proche antérieure). Pratique comme base brute avant de rédiger, sans passer par un modèle.</p>
     <textarea id="list-output" readonly style="height:60vh"></textarea>
   </div>
-
+*/
+    
   <div class="tabpanel hidden" id="tab-resume">
     <div class="cols-2">
       <div>
@@ -371,6 +383,28 @@ function visibleExams(queryOverride){
   return out;
 }
 
+// Renvoie les dateKeys à considérer, selon le pivot et le mode choisi.
+function scopedDateKeys(){
+  if (!PARSED) return [];
+  const pivot = document.getElementById('scope-date').value;
+  if (!document.getElementById('chk-scope-from').checked) return [pivot];
+  const pivotTime = toSortableDate(pivot);
+  return PARSED.dateKeys.filter(dk => toSortableDate(dk) >= pivotTime);
+}
+
+// Pour un examen donné, renvoie ses entrées dans ce périmètre de dates,
+// triées chronologiquement, réduites à la plus récente si demandé.
+function examEntriesInScope(data){
+  const entries = scopedDateKeys()
+    .filter(dk => data.values.has(dk))
+    .map(dk => ({ ...data.values.get(dk), date: dk }))
+    .sort((a, b) => toSortableDate(a.date) - toSortableDate(b.date));
+  if (!entries.length) return [];
+  return document.getElementById('chk-scope-latest').checked
+    ? [entries[entries.length - 1]]
+    : entries;
+}
+  
 function buildTable(){
   const table = document.getElementById('data-table');
   const dates = orderedDateKeys();
@@ -401,6 +435,35 @@ function buildTable(){
   table.innerHTML = html;
 }
 
+function buildCompactList(){
+  if (!PARSED) return;
+  const showNorms = document.getElementById('chk-list-norms').checked;
+  const q = document.getElementById('search-list').value || '';
+  const exams = visibleExams(q);
+
+  const lines = [];
+  let lastGroup = null;
+  for (const [label, data] of exams){
+    const entries = examEntriesInScope(data);
+    if (!entries.length) continue;
+
+    const group = data.section + (data.sub ? ' — ' + data.sub : '');
+    if (group !== lastGroup){
+      if (lines.length) lines.push('');
+      lines.push(group || '(non classé)');
+      lastGroup = group;
+    }
+    for (const entry of entries){
+      const arrow = entry.flag === '+' ? ' ↑' : (entry.flag === '-' ? ' ↓' : '');
+      const dateTag = entries.length > 1 ? ` [${entry.date}]` : ''; // utile si plusieurs valeurs
+      let line = `- ${label}${dateTag} : ${entry.value}${entry.unit ? ' ' + entry.unit : ''}${arrow}`;
+      if (showNorms && entry.ref) line += ` (N : ${entry.ref})`;
+      lines.push(line);
+    }
+  }
+  document.getElementById('list-output').value = lines.join('\n');
+}  
+  
 function buildInsertList(){
   const list = document.getElementById('insert-list');
   const q = normalizeForMatch(document.getElementById('search-insert').value || '');
