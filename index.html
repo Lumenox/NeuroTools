@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Extracteur de bilans biologiques Orbis ⭕ v1.0</title>
+<title>Extracteur de bilans biologiques v1.0</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   
 <style>
@@ -71,7 +71,7 @@
 </head>
 <body>
 
-<h1>Extracteur de bilans biologiques</h1>
+<h1>Extracteur de bilans biologiques ⭕rbis v1.0</h1>
 <p class="subtitle">Colle un copier-coller de compte-rendu de biologie standardisé : l'outil extrait chaque examen avec ses valeurs successives, construit un tableau examen × date, et permet d'insérer les valeurs dans un modèle de résumé de type courrier. Tout se passe dans le navigateur, rien n'est envoyé où que ce soit.</p>
 
 <div class="panel">
@@ -88,6 +88,7 @@
 <div id="result-area">
   <div class="tabs">
     <button id="tab-btn-table" class="active">Tableau</button>
+    <button id="tab-btn-list">Liste</button>
     <button id="tab-btn-resume">Résumé</button>
   </div>
 
@@ -98,6 +99,19 @@
       <button id="btn-copy-table">Copier le tableau (coller dans Excel)</button>
     </div>
     <div class="table-wrap"><table id="data-table"></table></div>
+  </div>
+
+  <div class="tabpanel hidden" id="tab-list">
+    <div class="table-controls">
+      <input type="text" id="search-list" placeholder="Filtrer un examen (ex : sodium, DFG, CRP…)">
+      <label class="opt">Date de référence :
+        <select id="ref-date-list"></select>
+      </label>
+      <label class="opt"><input type="checkbox" id="chk-list-norms" checked> Afficher les normes</label>
+      <button id="btn-copy-list">Copier la liste</button>
+    </div>
+    <p class="hint">Une ligne par examen, à la date choisie (ou la valeur disponible la plus proche antérieure). Pratique comme base brute avant de rédiger, sans passer par un modèle.</p>
+    <textarea id="list-output" readonly style="height:60vh"></textarea>
   </div>
 
   <div class="tabpanel hidden" id="tab-resume">
@@ -339,9 +353,8 @@ function orderedDateKeys(){
   return document.getElementById('chk-order').checked ? asc : [...asc].reverse();
 }
 
-function visibleExams(){
-  const hideTech = document.getElementById('chk-technical').checked; // déjà filtré au parsing ; conservé pour usage futur
-  const q = normalizeForMatch(document.getElementById('search').value || '');
+function visibleExams(queryOverride){
+  const q = normalizeForMatch(queryOverride !== undefined ? queryOverride : (document.getElementById('search').value || ''));
   const out = [];
   for (const [label, data] of PARSED.exams){
     if (q && !normalizeForMatch(label).includes(q) && !normalizeForMatch(data.section+' '+data.sub).includes(q)) continue;
@@ -402,10 +415,13 @@ function buildInsertList(){
   });
 }
 
-function buildRefDateSelect(){
-  const sel = document.getElementById('ref-date');
+function buildRefDateSelect(selectId){
+  const sel = document.getElementById(selectId);
+  if (!sel) return;
+  const prev = sel.value;
   const dates = [...PARSED.dateKeys].reverse(); // plus récent en premier
   sel.innerHTML = dates.map(d => `<option value="${d}">${d}</option>`).join('');
+  if (dates.includes(prev)) sel.value = prev; // conserve le choix si on réanalyse un texte proche
 }
 
 function insertAtCursor(textarea, text){
@@ -456,6 +472,39 @@ function generateSummary(){
   document.getElementById('summary-output').value = result;
   const warn = document.getElementById('missing-warn');
   warn.textContent = missing.length ? 'Non trouvés : ' + missing.join(', ') : '';
+}
+
+/* ============================================================================
+   LISTE COMPACTE — une ligne par examen (valeur + norme), à une date donnée.
+   ============================================================================ */
+
+function buildCompactList(){
+  if (!PARSED) return;
+  const refDate = document.getElementById('ref-date-list').value;
+  const showNorms = document.getElementById('chk-list-norms').checked;
+  const q = document.getElementById('search-list').value || '';
+  const exams = visibleExams(q);
+
+  const lines = [];
+  let lastGroup = null;
+  for (const [label, data] of exams){
+    const entry = valueAtOrBefore(data, refDate);
+    if (!entry) continue; // pas de valeur connue à cette date ou avant
+
+    const group = data.section + (data.sub ? ' — ' + data.sub : '');
+    if (group !== lastGroup){
+      if (lines.length) lines.push(''); // ligne vide entre rubriques
+      lines.push(group || '(non classé)');
+      lastGroup = group;
+    }
+
+    const arrow = entry.flag === '+' ? ' ↑' : (entry.flag === '-' ? ' ↓' : '');
+    let line = `- ${label} : ${entry.value}${entry.unit ? ' ' + entry.unit : ''}${arrow}`;
+    if (showNorms && entry.ref) line += ` (N : ${entry.ref})`;
+    lines.push(line);
+  }
+
+  document.getElementById('list-output').value = lines.join('\n');
 }
 
 /* ============================================================================
@@ -593,7 +642,9 @@ document.getElementById('btn-parse').addEventListener('click', () => {
     `${PARSED.exams.size} examens distincts, ${PARSED.dateKeys.length} prélèvements datés.`;
   buildTable();
   buildInsertList();
-  buildRefDateSelect();
+  buildRefDateSelect('ref-date');
+  buildRefDateSelect('ref-date-list');
+  buildCompactList();
 
   if (!document.getElementById('template-area').value.trim()){
     document.getElementById('template-area').value =
@@ -615,18 +666,28 @@ document.getElementById('btn-copy-table').addEventListener('click', copyTableAsT
 document.getElementById('btn-generate').addEventListener('click', generateSummary);
 document.getElementById('btn-copy-summary').addEventListener('click', () => navigator.clipboard.writeText(document.getElementById('summary-output').value));
 
-document.getElementById('tab-btn-table').addEventListener('click', () => {
-  document.getElementById('tab-btn-table').classList.add('active');
-  document.getElementById('tab-btn-resume').classList.remove('active');
-  document.getElementById('tab-table').classList.remove('hidden');
-  document.getElementById('tab-resume').classList.add('hidden');
-});
-document.getElementById('tab-btn-resume').addEventListener('click', () => {
-  document.getElementById('tab-btn-resume').classList.add('active');
-  document.getElementById('tab-btn-table').classList.remove('active');
-  document.getElementById('tab-resume').classList.remove('hidden');
-  document.getElementById('tab-table').classList.add('hidden');
-});
+document.getElementById('search-list').addEventListener('input', () => { if (PARSED) buildCompactList(); });
+document.getElementById('ref-date-list').addEventListener('change', () => { if (PARSED) buildCompactList(); });
+document.getElementById('chk-list-norms').addEventListener('change', () => { if (PARSED) buildCompactList(); });
+document.getElementById('btn-copy-list').addEventListener('click', () => navigator.clipboard.writeText(document.getElementById('list-output').value));
+
+// Bascule entre les trois onglets (Tableau / Liste / Résumé).
+const TABS = [
+  { btn: 'tab-btn-table', panel: 'tab-table' },
+  { btn: 'tab-btn-list', panel: 'tab-list' },
+  { btn: 'tab-btn-resume', panel: 'tab-resume' },
+];
+function switchTab(activeBtnId){
+  for (const t of TABS){
+    const isActive = t.btn === activeBtnId;
+    document.getElementById(t.btn).classList.toggle('active', isActive);
+    document.getElementById(t.panel).classList.toggle('hidden', !isActive);
+  }
+}
+for (const t of TABS){
+  document.getElementById(t.btn).addEventListener('click', () => switchTab(t.btn));
+}
+
 </script>
 </body>
 </html>
