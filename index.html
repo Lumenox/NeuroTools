@@ -352,13 +352,24 @@ function normalizeForMatch(s){
   return s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
 }
 
-// NB : ne gère pas encore les homonymes entre rubriques (ex. Sodium sang vs
-// urines) — résolution/qualification @ Rubrique prévue à l'étape 1.
-function findExamByName(name){
-  if (!PARSED) return null;
+
+// Renvoie un statut explicite plutôt qu'un simple trouvé/pas trouvé, pour que
+// generateSummary() puisse distinguer "n'existe pas" d'"existe en double,
+// précise avec @ Rubrique" — jamais choisir silencieusement entre les deux.
+function findExamByName(name, qualifier){
+  if (!PARSED) return { status: 'not-found' };
   const target = normalizeForMatch(name);
-  for (const data of PARSED.exams.values()) if (normalizeForMatch(data.label) === target) return { label: data.label, data };
-  return null;
+  const candidates = [...PARSED.exams.values()].filter(data => normalizeForMatch(data.label) === target);
+  if (!candidates.length) return { status: 'not-found' };
+
+  let pool = candidates;
+  if (qualifier){
+    const q = normalizeForMatch(qualifier);
+    pool = candidates.filter(data => normalizeForMatch(data.section + ' ' + data.sub).includes(q));
+    if (!pool.length) return { status: 'qualifier-no-match', candidates };
+  }
+  if (pool.length === 1) return { status: 'ok', data: pool[0] };
+  return { status: 'ambiguous', candidates: pool };
 }
 
 function orderedDateKeys(){
@@ -417,14 +428,26 @@ function buildTable(){
 function buildInsertList(){
   const list = document.getElementById('insert-list');
   const q = normalizeForMatch(document.getElementById('search-insert').value || '');
+
+  // Un libellé est ambigu s'il existe sous plusieurs couples (rubrique,
+  // sous-rubrique) parmi les examens actuellement extraits.
+  const labelCounts = {};
+  for (const data of PARSED.exams.values()){
+    const k = normalizeForMatch(data.label);
+    labelCounts[k] = (labelCounts[k] || 0) + 1;
+  }
+
   let html = '';
   for (const data of PARSED.exams.values()){
     if (q && !normalizeForMatch(data.label).includes(q)) continue;
-    html += `<button type="button" data-label="${data.label.replace(/"/g,'&quot;')}"><span class="cat">${data.section}${data.sub ? ' — '+data.sub : ''}</span>${data.label}</button>`;
+    const ambiguous = labelCounts[normalizeForMatch(data.label)] > 1;
+    const placeholder = ambiguous ? `${data.label} @ ${data.sub || data.section}` : data.label;
+    const title = ambiguous ? ' title="Existe aussi sous une autre rubrique — placeholder qualifié automatiquement"' : '';
+    html += `<button type="button" data-placeholder="${placeholder.replace(/"/g,'&quot;')}"${title}><span class="cat">${data.section}${data.sub ? ' — '+data.sub : ''}</span>${data.label}${ambiguous ? ' ⚠️' : ''}</button>`;
   }
   list.innerHTML = html;
   list.querySelectorAll('button').forEach(btn => {
-    btn.addEventListener('click', () => insertAtCursor(document.getElementById('template-area'), '{{'+btn.dataset.label+'}}'));
+    btn.addEventListener('click', () => insertAtCursor(document.getElementById('template-area'), '{{'+btn.dataset.placeholder+'}}'));
   });
 }
 
@@ -472,9 +495,25 @@ function generateSummary(){
   const refDate = document.getElementById('ref-date').value;
   const missing = [];
 
-  const result = template.replace(/\{\{\s*([^}|]+?)\s*(?:\|\s*(valeur|date)\s*)?\}\}/g, (whole, name, mode) => {
-    const found = findExamByName(name);
-    if (!found){ missing.push(name); return whole; }
+  // Accepte désormais {{Label}}, {{Label|valeur}}, {{Label @ Rubrique}} et
+  // {{Label @ Rubrique|valeur}} — le qualificatif @ est toujours optionnel.
+  const result = template.replace(/\{\{\s*([^}|@]+?)\s*(?:@\s*([^}|]+?)\s*)?(?:\|\s*(valeur|date)\s*)?\}\}/g, (whole, name, qualifier, mode) => {
+    const found = findExamByName(name, qualifier);
+
+    if (found.status === 'not-found'){ missing.push(name); return whole; }
+
+    if (found.status === 'qualifier-no-match'){
+      const options = [...new Set(found.candidates.map(d => d.section + (d.sub ? ' — ' + d.sub : '')))];
+      missing.push(`${name} @ ${qualifier} (aucune rubrique ne correspond parmi : ${options.join(' | ')})`);
+      return whole;
+    }
+
+    if (found.status === 'ambiguous'){
+      const options = [...new Set(found.candidates.map(d => d.section + (d.sub ? ' — ' + d.sub : '')))];
+      missing.push(`${name} (ambigu — précise avec {{${name} @ ...}} parmi : ${options.join(' | ')})`);
+      return whole;
+    }
+
     const entry = valueAtOrBefore(found.data, refDate);
     if (!entry){ missing.push(name + ' (aucune valeur ≤ date choisie)'); return whole; }
     if (mode === 'valeur') return entry.value;
@@ -484,7 +523,7 @@ function generateSummary(){
 
   document.getElementById('summary-output').value = result;
   const warn = document.getElementById('missing-warn');
-  warn.textContent = missing.length ? 'Non trouvés : ' + missing.join(', ') : '';
+  warn.textContent = missing.length ? 'À vérifier : ' + missing.join(' ; ') : '';
 }
 
 /* ============================================================================
