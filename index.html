@@ -180,6 +180,24 @@ const IGNORE_LABEL_PATTERNS = [
   /^Motif$/i,
 ];
 
+// Synonymes de libellés : la clé est le nom "canonique" à utiliser dans templates ; chaque entrée liste les variantes déjà rencontrées qui désignent
+// le même examen. N'affecte JAMAIS le Tableau ni la Liste (qui gardent le libellé brut du compte-rendu, étape 0 oblige) — seulement la résolution des
+// placeholders {{...}} du Résumé. À compléter librement, sans toucher au reste du code.
+const LABEL_ALIASES = {
+  'Créatininémie': ['Créatininémie héparine lithium', 'Créatininémie sur tube sec'],
+};
+
+// Si `text` est une variante connue (ou le nom canonique lui-même) d'une entrée de LABEL_ALIASES, renvoie ce nom canonique ; sinon renvoie `text`
+// tel quel (donc un libellé sans alias connu se comporte exactement comme avant — ce n'est qu'un repli).
+function resolveCanonical(text){
+  const target = normalizeForMatch(text);
+  for (const canon in LABEL_ALIASES){
+    if (normalizeForMatch(canon) === target) return canon;
+    if (LABEL_ALIASES[canon].some(v => normalizeForMatch(v) === target)) return canon;
+  }
+  return text;
+}
+  
 // Corrections cosmétiques d'unités tronquées par la largeur de colonne
 // (la troncature ne porte, dans ce cas, sur aucune note de bas de page).
 const UNIT_FIXES = {
@@ -360,7 +378,15 @@ function normalizeForMatch(s){
 function findExamByName(name, qualifier){
   if (!PARSED) return { status: 'not-found' };
   const target = normalizeForMatch(name);
-  const candidates = [...PARSED.exams.values()].filter(data => normalizeForMatch(data.label) === target);
+  let candidates = [...PARSED.exams.values()].filter(data => normalizeForMatch(data.label) === target);
+
+  if (!candidates.length){
+    // Repli par alias : le nom demandé et/ou le libellé réel du compte-rendu peuvent être des variantes l'un de l'autre (LABEL_ALIASES). 
+    // On élargit la recherche uniquement ici, à la lecture — les examens eux-mêmes restent distincts dans PARSED.exams (étape 0).
+    const canonTarget = normalizeForMatch(resolveCanonical(name));
+    candidates = [...PARSED.exams.values()].filter(data => normalizeForMatch(resolveCanonical(data.label)) === canonTarget);
+  }
+
   if (!candidates.length) return { status: 'not-found' };
 
   let pool = candidates;
