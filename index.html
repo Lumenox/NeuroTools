@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Extracteur de bilans biologiques v1.0</title>
+<title>Extracteur de bilans biologiques Orbis ⭕ v1.0</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   
 <style>
@@ -71,7 +71,7 @@
 </head>
 <body>
 
-<h1>Extracteur de bilans biologiques ⭕rbis v1.0</h1>
+<h1>Extracteur de bilans biologiques</h1>
 <p class="subtitle">Colle un copier-coller de compte-rendu de biologie standardisé : l'outil extrait chaque examen avec ses valeurs successives, construit un tableau examen × date, et permet d'insérer les valeurs dans un modèle de résumé de type courrier. Tout se passe dans le navigateur, rien n'est envoyé où que ce soit.</p>
 
 <div class="panel">
@@ -85,17 +85,7 @@
   <div class="stats" id="stats"></div>
 </div>
 
-  <div id="result-area">
-    <div class="panel" id="scope-panel" style="display:none">  
-    <h2>Période affichée</h2>
-    <div class="row">
-      <label class="opt">Date de référence :
-        <select id="scope-date"></select>
-      </label>
-      <label class="opt"><input type="checkbox" id="chk-scope-from"> À partir de cette date</label>
-      <label class="opt"><input type="checkbox" id="chk-scope-latest"> Ne garder que le plus récent</label>
-    </div>
-  </div>
+<div id="result-area">
   <div class="tabs">
     <button id="tab-btn-table" class="active">Tableau</button>
     <button id="tab-btn-list">Liste</button>
@@ -110,7 +100,6 @@
     </div>
     <div class="table-wrap"><table id="data-table"></table></div>
   </div>
-    
 
   <div class="tabpanel hidden" id="tab-list">
     <div class="table-controls">
@@ -125,7 +114,6 @@
     <textarea id="list-output" readonly style="height:60vh"></textarea>
   </div>
 
-    
   <div class="tabpanel hidden" id="tab-resume">
     <div class="cols-2">
       <div>
@@ -142,11 +130,9 @@
         </div>
         
         <div class="row">
-          <!--
           <label class="opt">Date de référence :
             <select id="ref-date"></select>
           </label>
-          !-->
           <button class="primary" id="btn-generate">Générer le résumé</button>
         </div>
         <div id="missing-warn" class="warn"></div>
@@ -209,6 +195,16 @@ const FOOTNOTE_LINE_RE = /^([⁰¹²³⁴⁵⁶⁷⁸⁹]+)\s+(.*)$/;
 const TRAILING_FOOTNOTE_RE = /…([⁰¹²³⁴⁵⁶⁷⁸⁹]+)\s*$/;
 
 function supToDigits(s){ return s.split('').map(c => SUPERSCRIPTS[c] || '').join(''); }
+
+// Un même libellé (ex. "Sodium") peut exister sous plusieurs rubriques
+// distinctes (sang, urines, LCR...), avec des valeurs totalement différentes.
+// L'identité d'un examen est donc (rubrique, sous-rubrique, libellé), jamais
+// le libellé seul — sous peine de fusionner silencieusement deux examens
+// différents sous la même ligne. \u241F est un séparateur improbable dans un
+// texte médical, utilisé uniquement comme clé technique interne (jamais affiché).
+function examKey(section, sub, label){
+  return section + '\u241F' + sub + '\u241F' + label;
+}
 
 function isAllCaps(s){
   const letters = s.replace(/[^A-Za-zÀ-ÿ]/g, '');
@@ -316,8 +312,9 @@ function parseReport(text){
         const dateKey = currentDate ? (currentDate + (currentTime ? ' ' + currentTime : '')) : 'Date inconnue';
         dateKeySet.add(dateKey);
 
-        if (!exams.has(label)) exams.set(label, { section: currentSection, sub: currentSub, values: new Map() });
-        exams.get(label).values.set(dateKey, { value: valueRaw, flag, unit, ref });
+        const key = examKey(currentSection, currentSub, label);
+        if (!exams.has(key)) exams.set(key, { label, section: currentSection, sub: currentSub, values: new Map() });
+        exams.get(key).values.set(dateKey, { value: valueRaw, flag, unit, ref });
         continue;
       }
 
@@ -355,10 +352,12 @@ function normalizeForMatch(s){
   return s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
 }
 
+// NB : ne gère pas encore les homonymes entre rubriques (ex. Sodium sang vs
+// urines) — résolution/qualification @ Rubrique prévue à l'étape 1.
 function findExamByName(name){
-  const target = normalizeForMatch(name);
   if (!PARSED) return null;
-  for (const [label, data] of PARSED.exams) if (normalizeForMatch(label) === target) return { label, data };
+  const target = normalizeForMatch(name);
+  for (const data of PARSED.exams.values()) if (normalizeForMatch(data.label) === target) return { label: data.label, data };
   return null;
 }
 
@@ -370,43 +369,21 @@ function orderedDateKeys(){
 function visibleExams(queryOverride){
   const q = normalizeForMatch(queryOverride !== undefined ? queryOverride : (document.getElementById('search').value || ''));
   const out = [];
-  for (const [label, data] of PARSED.exams){
-    if (q && !normalizeForMatch(label).includes(q) && !normalizeForMatch(data.section+' '+data.sub).includes(q)) continue;
-    out.push([label, data]);
+  for (const data of PARSED.exams.values()){
+    if (q && !normalizeForMatch(data.label).includes(q) && !normalizeForMatch(data.section+' '+data.sub).includes(q)) continue;
+    out.push(data);
   }
   // Regroupement par section/sous-section, dans l'ordre de première apparition.
   const order = [];
   const seen = new Set();
-  for (const [label, data] of out){
+  for (const data of out){
     const key = data.section + '||' + data.sub;
     if (!seen.has(key)){ seen.add(key); order.push(key); }
   }
-  out.sort((a,b) => order.indexOf(a[1].section+'||'+a[1].sub) - order.indexOf(b[1].section+'||'+b[1].sub));
+  out.sort((a,b) => order.indexOf(a.section+'||'+a.sub) - order.indexOf(b.section+'||'+b.sub));
   return out;
 }
 
-// Renvoie les dateKeys à considérer, selon le pivot et le mode choisi.
-function scopedDateKeys(){
-  if (!PARSED) return [];
-  const pivot = document.getElementById('scope-date').value;
-  if (!document.getElementById('chk-scope-from').checked) return [pivot];
-  const pivotTime = toSortableDate(pivot);
-  return PARSED.dateKeys.filter(dk => toSortableDate(dk) >= pivotTime);
-}
-
-// Pour un examen donné, renvoie ses entrées dans ce périmètre de dates,
-// triées chronologiquement, réduites à la plus récente si demandé.
-function examEntriesInScope(data){
-  const entries = scopedDateKeys()
-    .filter(dk => data.values.has(dk))
-    .map(dk => ({ ...data.values.get(dk), date: dk }))
-    .sort((a, b) => toSortableDate(a.date) - toSortableDate(b.date));
-  if (!entries.length) return [];
-  return document.getElementById('chk-scope-latest').checked
-    ? [entries[entries.length - 1]]
-    : entries;
-}
-  
 function buildTable(){
   const table = document.getElementById('data-table');
   const dates = orderedDateKeys();
@@ -417,13 +394,13 @@ function buildTable(){
   html += '</tr></thead><tbody>';
 
   let lastGroup = null;
-  for (const [label, data] of exams){
+  for (const data of exams){
     const group = data.section + (data.sub ? ' — ' + data.sub : '');
     if (group !== lastGroup){
       html += `<tr class="section-row"><td colspan="${dates.length+1}">${group || '(non classé)'}</td></tr>`;
       lastGroup = group;
     }
-    html += `<tr><td class="label">${label}</td>`;
+    html += `<tr><td class="label">${data.label}</td>`;
     for (const d of dates){
       const entry = data.values.get(d);
       if (!entry){ html += '<td></td>'; continue; }
@@ -437,42 +414,13 @@ function buildTable(){
   table.innerHTML = html;
 }
 
-function buildCompactList(){
-  if (!PARSED) return;
-  const showNorms = document.getElementById('chk-list-norms').checked;
-  const q = document.getElementById('search-list').value || '';
-  const exams = visibleExams(q);
-
-  const lines = [];
-  let lastGroup = null;
-  for (const [label, data] of exams){
-    const entries = examEntriesInScope(data);
-    if (!entries.length) continue;
-
-    const group = data.section + (data.sub ? ' — ' + data.sub : '');
-    if (group !== lastGroup){
-      if (lines.length) lines.push('');
-      lines.push(group || '(non classé)');
-      lastGroup = group;
-    }
-    for (const entry of entries){
-      const arrow = entry.flag === '+' ? ' ↑' : (entry.flag === '-' ? ' ↓' : '');
-      const dateTag = entries.length > 1 ? ` [${entry.date}]` : ''; // utile si plusieurs valeurs
-      let line = `- ${label}${dateTag} : ${entry.value}${entry.unit ? ' ' + entry.unit : ''}${arrow}`;
-      if (showNorms && entry.ref) line += ` (N : ${entry.ref})`;
-      lines.push(line);
-    }
-  }
-  document.getElementById('list-output').value = lines.join('\n');
-}  
-  
 function buildInsertList(){
   const list = document.getElementById('insert-list');
   const q = normalizeForMatch(document.getElementById('search-insert').value || '');
   let html = '';
-  for (const [label, data] of PARSED.exams){
-    if (q && !normalizeForMatch(label).includes(q)) continue;
-    html += `<button type="button" data-label="${label.replace(/"/g,'&quot;')}"><span class="cat">${data.section}${data.sub ? ' — '+data.sub : ''}</span>${label}</button>`;
+  for (const data of PARSED.exams.values()){
+    if (q && !normalizeForMatch(data.label).includes(q)) continue;
+    html += `<button type="button" data-label="${data.label.replace(/"/g,'&quot;')}"><span class="cat">${data.section}${data.sub ? ' — '+data.sub : ''}</span>${data.label}</button>`;
   }
   list.innerHTML = html;
   list.querySelectorAll('button').forEach(btn => {
@@ -552,7 +500,7 @@ function buildCompactList(){
 
   const lines = [];
   let lastGroup = null;
-  for (const [label, data] of exams){
+  for (const data of exams){
     const entry = valueAtOrBefore(data, refDate);
     if (!entry) continue; // pas de valeur connue à cette date ou avant
 
@@ -564,7 +512,7 @@ function buildCompactList(){
     }
 
     const arrow = entry.flag === '+' ? ' ↑' : (entry.flag === '-' ? ' ↓' : '');
-    let line = `- ${label} : ${entry.value}${entry.unit ? ' ' + entry.unit : ''}${arrow}`;
+    let line = `- ${data.label} : ${entry.value}${entry.unit ? ' ' + entry.unit : ''}${arrow}`;
     if (showNorms && entry.ref) line += ` (N : ${entry.ref})`;
     lines.push(line);
   }
@@ -672,10 +620,10 @@ function exportCSV(){
   const dates = orderedDateKeys();
   const exams = visibleExams();
   const rows = [['Rubrique', 'Sous-rubrique', 'Examen', 'Unité', 'Référence', ...dates]];
-  for (const [label, data] of exams){
+  for (const data of exams){
     const unit = [...data.values.values()].find(v => v.unit)?.unit || '';
     const ref = [...data.values.values()].find(v => v.ref)?.ref || '';
-    rows.push([data.section, data.sub, label, unit, ref, ...dates.map(d => data.values.get(d)?.value ?? '')]);
+    rows.push([data.section, data.sub, data.label, unit, ref, ...dates.map(d => data.values.get(d)?.value ?? '')]);
   }
   const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(';')).join('\n');
   const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
@@ -689,7 +637,7 @@ function copyTableAsTSV(){
   const dates = orderedDateKeys();
   const exams = visibleExams();
   const rows = [['Examen', ...dates]];
-  for (const [label, data] of exams) rows.push([label, ...dates.map(d => data.values.get(d)?.value ?? '')]);
+  for (const data of exams) rows.push([data.label, ...dates.map(d => data.values.get(d)?.value ?? '')]);
   const tsv = rows.map(r => r.join('\t')).join('\n');
   navigator.clipboard.writeText(tsv);
 }
@@ -731,13 +679,11 @@ document.getElementById('btn-copy-table').addEventListener('click', copyTableAsT
 document.getElementById('btn-generate').addEventListener('click', generateSummary);
 document.getElementById('btn-copy-summary').addEventListener('click', () => navigator.clipboard.writeText(document.getElementById('summary-output').value));
 
-//
 document.getElementById('search-list').addEventListener('input', () => { if (PARSED) buildCompactList(); });
 document.getElementById('ref-date-list').addEventListener('change', () => { if (PARSED) buildCompactList(); });
 document.getElementById('chk-list-norms').addEventListener('change', () => { if (PARSED) buildCompactList(); });
 document.getElementById('btn-copy-list').addEventListener('click', () => navigator.clipboard.writeText(document.getElementById('list-output').value));
-//
-  
+
 // Bascule entre les trois onglets (Tableau / Liste / Résumé).
 const TABS = [
   { btn: 'tab-btn-table', panel: 'tab-table' },
