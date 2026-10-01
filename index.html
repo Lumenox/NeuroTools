@@ -144,6 +144,7 @@
       <div>
         <h2 style="margin-top:0">Examens disponibles</h2>
         <input type="text" id="search-insert" placeholder="Filtrer…" style="width:100%;margin-bottom:8px;">
+        <button type="button" id="btn-add-alias" style="width:100%;margin-bottom:8px;">+ Ajouter un alias</button>
         <div class="insert-list" id="insert-list"></div>
       </div>
     </div>
@@ -183,9 +184,12 @@ const IGNORE_LABEL_PATTERNS = [
 // Synonymes de libellés : la clé est le nom "canonique" à utiliser dans templates ; chaque entrée liste les variantes déjà rencontrées qui désignent
 // le même examen. N'affecte JAMAIS le Tableau ni la Liste (qui gardent le libellé brut du compte-rendu, étape 0 oblige) — seulement la résolution des
 // placeholders {{...}} du Résumé. À compléter librement, sans toucher au reste du code.
-const LABEL_ALIASES = {
+// Alias intégrés en dur : utilisés tant que la table Supabase n'a pas encore répondu, et comme filet si le réseau est indisponible. fetchLabelAliases()
+// (plus bas, section GESTION ALIAS) les fusionne avec ceux stockés dans Supabase au chargement de la page.
+const LABEL_ALIASES_BUILTIN = {
   'Créatininémie': ['Créatininémie héparine lithium', 'Créatininémie sur tube sec'],
 };
+let LABEL_ALIASES = { ...LABEL_ALIASES_BUILTIN };
 
 // Si `text` est une variante connue (ou le nom canonique lui-même) d'une entrée de LABEL_ALIASES, renvoie ce nom canonique ; sinon renvoie `text`
 // tel quel (donc un libellé sans alias connu se comporte exactement comme avant — ce n'est qu'un repli).
@@ -633,7 +637,42 @@ async function setAsDefaultTemplate(templateId, status) {
 
   if (error) console.error("Erreur de mise à jour :", error);
 }
+/* ============================================================================
+   GESTION ALIAS
+   ============================================================================ */
 
+// 1. Charger tous les alias partagés, fusionnés avec le filet intégré.
+async function fetchLabelAliases() {
+  const { data, error } = await supabaseClient
+    .from('label_aliases')
+    .select('*');
+
+  if (error) {
+    console.error("Erreur de chargement des alias :", error);
+    return; // LABEL_ALIASES reste à son état précédent (au pire, le filet intégré)
+  }
+
+  const merged = { ...LABEL_ALIASES_BUILTIN };
+  for (const row of data){
+    (merged[row.canonical] ??= []);
+    if (!merged[row.canonical].includes(row.variant)) merged[row.canonical].push(row.variant);
+  }
+  LABEL_ALIASES = merged;
+}
+
+// 2. Ajouter un alias (visible par tout le monde dès le prochain chargement).
+async function addLabelAlias(canonical, variant) {
+  const { error } = await supabaseClient
+    .from('label_aliases')
+    .insert([{ canonical, variant }]);
+
+  if (error) {
+    alert("Erreur lors de l'ajout de l'alias : " + error.message);
+  } else {
+    await fetchLabelAliases(); // actif immédiatement, sans recharger la page
+    alert("Alias enregistré.");
+  }
+}
 /* ============================================================================
    INTERFACE & SUPABASE PRESETS
    ============================================================================ */
@@ -659,6 +698,7 @@ async function initPresetDropdown() {
 // 2. Initialisation au chargement de la page
 window.addEventListener('DOMContentLoaded', () => {
   initPresetDropdown();
+  fetchLabelAliases();
 });
 
 // 3. Écouteurs d'événements
@@ -753,6 +793,13 @@ document.getElementById('search-list').addEventListener('input', () => { if (PAR
 document.getElementById('ref-date-list').addEventListener('change', () => { if (PARSED) buildCompactList(); });
 document.getElementById('chk-list-norms').addEventListener('change', () => { if (PARSED) buildCompactList(); });
 document.getElementById('btn-copy-list').addEventListener('click', () => navigator.clipboard.writeText(document.getElementById('list-output').value));
+document.getElementById('btn-add-alias')?.addEventListener('click', async () => {
+  const variant = prompt('Libellé exact rencontré dans un compte-rendu (la variante) :');
+  if (!variant) return;
+  const canonical = prompt('Nom canonique à utiliser dans tes templates :', variant);
+  if (!canonical) return;
+  await addLabelAlias(canonical.trim(), variant.trim());
+});
 
 // Bascule entre les trois onglets (Tableau / Liste / Résumé).
 const TABS = [
