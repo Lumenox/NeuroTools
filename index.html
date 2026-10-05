@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Extracteur de bilans biologiques Orbis ⭕ v1.0</title>
+<title>Extracteur de bilans biologiques ⭕rbis v1.0</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   
 <style>
@@ -53,8 +53,17 @@
   th{position:sticky;top:0;background:#F0F1EC;font-weight:600;text-align:center;z-index:2;}
   td.label,th.label{text-align:left;white-space:normal;max-width:260px;position:sticky;left:0;background:var(--surface);z-index:1;font-family:var(--sans);}
   th.label{background:#F0F1EC;z-index:3;}
-  tr.section-row td{background:var(--accent-soft);font-weight:600;color:var(--accent)}
-  tr.section-row td.label {  background: var(--accent-soft); /* Assure le fond vert clair sur la colonne fixée */   position: sticky;  left: 0;  z-index: 1;}
+  tr.section-row td {
+  background: var(--accent-soft);
+  font-weight: 600;
+  color: var(--accent);
+}
+tr.section-row td.label {
+  background: var(--accent-soft); /* Assure le fond vert clair sur la colonne fixée */
+  position: sticky;
+  left: 0;
+  z-index: 1;
+}
   td.val{font-family:var(--mono);}
   td.flag-high{background:var(--high-bg);color:var(--high);}
   td.flag-low{background:var(--low-bg);color:var(--low);}
@@ -78,6 +87,11 @@
 <div class="panel">
   <h2>1. Coller le compte-rendu</h2>
   <textarea id="raw-input" placeholder="Coller ici le texte copié depuis le dossier biologique…"></textarea>
+  <div class="row">
+    <label class="opt">— ou importer un export HTML (contient aussi les "En cours"/"En attente") :
+      <input type="file" id="html-input" accept=".html,.htm">
+    </label>
+  </div>
   <div class="row">
     <button class="primary" id="btn-parse">Analyser</button>
     <label class="opt"><input type="checkbox" id="chk-technical" checked> Masquer les lignes techniques (PDF, identité biologiste, prélèvement…)</label>
@@ -179,20 +193,37 @@ const IGNORE_LABEL_PATTERNS = [
   /^Attestation retour/i,
   /^Accus[ée] de r[ée]ception/i,
   /^Motif$/i,
+  // Spécifiques à l'import HTML (absents du copier-coller texte) :
+  /^Patient$/i,
+  /^Dossier$/i,
+  /^Imprimé par /i,
 ];
 
-// Synonymes de libellés : la clé est le nom "canonique" à utiliser dans templates ; chaque entrée liste les variantes déjà rencontrées qui désignent
-// le même examen. N'affecte JAMAIS le Tableau ni la Liste (qui gardent le libellé brut du compte-rendu, étape 0 oblige) — seulement la résolution des
-// placeholders {{...}} du Résumé. À compléter librement, sans toucher au reste du code.
-// Alias intégrés en dur : utilisés tant que la table Supabase n'a pas encore répondu, et comme filet si le réseau est indisponible. fetchLabelAliases()
-// (plus bas, section GESTION ALIAS) les fusionne avec ceux stockés dans Supabase au chargement de la page.
+// Corrections cosmétiques d'unités tronquées par la largeur de colonne
+// (la troncature ne porte, dans ce cas, sur aucune note de bas de page).
+const UNIT_FIXES = {
+  'mL/min/…': 'mL/min/1.73m²',
+};
+
+// Synonymes de libellés : la clé est le nom "canonique" à utiliser dans tes
+// templates ; chaque entrée liste les variantes déjà rencontrées qui désignent
+// le même examen. N'affecte JAMAIS le Tableau ni la Liste (qui gardent le
+// libellé brut du compte-rendu, étape 0 oblige) — seulement la résolution des
+// placeholders {{...}} du Résumé. À compléter librement, sans toucher au
+// reste du code.
+// Alias intégrés en dur : utilisés tant que la table Supabase n'a pas encore
+// répondu, et comme filet si le réseau est indisponible. fetchLabelAliases()
+// (section GESTION ALIAS) les fusionne avec ceux stockés dans Supabase au
+// chargement de la page.
 const LABEL_ALIASES_BUILTIN = {
   'Créatininémie': ['Créatininémie héparine lithium', 'Créatininémie sur tube sec'],
 };
 let LABEL_ALIASES = { ...LABEL_ALIASES_BUILTIN };
 
-// Si `text` est une variante connue (ou le nom canonique lui-même) d'une entrée de LABEL_ALIASES, renvoie ce nom canonique ; sinon renvoie `text`
-// tel quel (donc un libellé sans alias connu se comporte exactement comme avant — ce n'est qu'un repli).
+// Si `text` est une variante connue (ou le nom canonique lui-même) d'une
+// entrée de LABEL_ALIASES, renvoie ce nom canonique ; sinon renvoie `text`
+// tel quel (donc un libellé sans alias connu se comporte exactement comme
+// avant — ce n'est qu'un repli).
 function resolveCanonical(text){
   const target = normalizeForMatch(text);
   for (const canon in LABEL_ALIASES){
@@ -201,12 +232,6 @@ function resolveCanonical(text){
   }
   return text;
 }
-  
-// Corrections cosmétiques d'unités tronquées par la largeur de colonne
-// (la troncature ne porte, dans ce cas, sur aucune note de bas de page).
-const UNIT_FIXES = {
-  'mL/min/…': 'mL/min/1.73m²',
-};
 
 /* ============================================================================
    MOTEUR DE PARSING
@@ -242,10 +267,8 @@ function isIgnoredLabel(label){
 function resolveFootnote(text, footnotes){
   const m = text.match(TRAILING_FOOTNOTE_RE);
   if (!m) return text;
-  const digits = supToDigits(m[1]);
-  let resolved = null;
-  for (const d of digits) if (footnotes[d]) resolved = footnotes[d];
-  return resolved !== null ? resolved : text.replace(TRAILING_FOOTNOTE_RE, '');
+  const digits = supToDigits(m[1]); // "¹⁰" -> "10", une seule clé, pas deux
+  return footnotes[digits] !== undefined ? footnotes[digits] : text.replace(TRAILING_FOOTNOTE_RE, '');
 }
 
 /**
@@ -290,8 +313,11 @@ function parseReport(text){
       if (t.includes('¦')) continue;
       const m = t.match(FOOTNOTE_LINE_RE);
       if (m){
+        // Un renvoi comme "¹⁰" est le nombre 10, pas les chiffres 1 et 0
+        // séparément — une seule clé par renvoi, jamais une par caractère
+        // (sinon la note ³¹ écrase silencieusement les notes ¹ et ³).
         const digits = supToDigits(m[1]);
-        for (const d of digits) footnotes[d] = m[2];
+        footnotes[digits] = m[2];
       }
     }
 
@@ -345,8 +371,20 @@ function parseReport(text){
       if (FOOTNOTE_LINE_RE.test(trimmed)) continue;
 
       // Heuristique de repérage des titres de rubrique / sous-rubrique.
+      // Exclut en plus :
+      //  - les lignes finissant par ":" (ex. "Attention :", "Interprétation
+      //    Troponine T :") — ce sont des amorces de commentaire, jamais de
+      //    vrais titres dans ce format ;
+      //  - les lignes contenant "_" (ex. "HMN_BG_BIOTINE") — ce sont des
+      //    codes administratifs/protocoles, jamais des titres non plus.
+      // Sans ces deux exclusions, une telle ligne écrase silencieusement la
+      // rubrique ou sous-rubrique en cours pour tous les examens suivants du
+      // bloc, jusqu'au prochain vrai titre.
       const wordCount = trimmed.split(/\s+/).length;
-      if (trimmed.length < 60 && wordCount <= 6 && !/[.,]$/.test(trimmed)){
+      const looksLikeHeading = trimmed.length < 60 && wordCount <= 6
+        && !/[.,:]$/.test(trimmed)
+        && !trimmed.includes('_');
+      if (looksLikeHeading){
         if (isAllCaps(trimmed)){ currentSection = trimmed; currentSub = ''; }
         else { currentSub = trimmed; }
       }
@@ -365,6 +403,103 @@ function parseReport(text){
   return { exams, dateKeys };
 }
 
+function looksLikeRange(s){
+  return /^[<>]/.test(s) || /\d.*-.*\d/.test(s);
+}
+
+/**
+ * Analyse un export HTML (impression/PDF) Orbis et renvoie la même forme
+ * que parseReport() : { exams, dateKeys }. Toute la suite de l'outil
+ * (Tableau, Liste, Résumé) consomme cette forme sans savoir d'où elle vient.
+ *
+ * Contrairement au texte copié-collé, cet export contient aussi les examens
+ * "En cours"/"En attente" — c'est tout l'intérêt de cette voie d'entrée.
+ *
+ * Limite connue, non résolue : l'encodage d'un résultat anormal (+/-) n'a pas
+ * été identifié dans cet export (aucun exemple disponible à ce jour). Les
+ * valeurs importées par ce chemin n'auront donc jamais de surlignage dans le
+ * Tableau. Si tu tombes sur un export contenant un résultat flagué, c'est ici
+ * qu'il faudra regarder.
+ */
+function parseOrbisHtmlExport(html){
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+
+  const exams = new Map();
+  const dateKeySet = new Set();
+  let currentDate = null, currentTime = null;
+  let currentSection = '', currentSub = '';
+
+  for (const tr of doc.querySelectorAll('tr')){
+    // Ignore les <tr> imbriqués dans un div position:absolute : ce sont des
+    // sous-tables de positionnement visuel (utilisées pour aligner la valeur
+    // d'un résultat dans sa cellule), pas des lignes de contenu à part
+    // entière — leur texte est déjà inclus dans le textContent de la ligne
+    // englobante. Sans ce filtre, chaque résultat génère une fausse ligne
+    // supplémentaire (juste sa valeur) prise à tort pour un titre de rubrique.
+    let ancestor = tr.parentElement, isNestedPositioning = false;
+    while (ancestor){
+      if (ancestor.tagName === 'DIV' && /position:\s*absolute/.test(ancestor.getAttribute('style') || '')){
+        isNestedPositioning = true;
+        break;
+      }
+      ancestor = ancestor.parentElement;
+    }
+    if (isNestedPositioning) continue;
+
+    const tokens = [...tr.children]
+      .filter(td => td.tagName === 'TD')
+      .map(td => td.textContent.trim())
+      .filter(Boolean);
+    if (!tokens.length) continue;
+
+    // Ligne d'en-tête de prélèvement ("Prélevé le" | date | ...) : capture la date.
+    if (tokens.some(t => DATE_RE.test(t))){
+      currentDate = tokens.find(t => DATE_RE.test(t));
+      continue;
+    }
+    // Ligne d'en-tête d'heure, isolée sur sa propre ligne.
+    if (tokens.length <= 2 && tokens.some(t => TIME_RE.test(t))){
+      currentTime = tokens.find(t => TIME_RE.test(t));
+      continue;
+    }
+
+    // Bandeau grisé à une seule case : titre de rubrique (tout en majuscules)
+    // ou de sous-rubrique (sinon) — même heuristique que parseReport().
+    if (tokens.length === 1){
+      if (isAllCaps(tokens[0])){ currentSection = tokens[0]; currentSub = ''; }
+      else { currentSub = tokens[0]; }
+      continue;
+    }
+
+    let label, unit = '', value, ref = '';
+    if (tokens.length === 2){
+      [label, value] = tokens; // couvre notamment "En cours" / "En attente"
+    } else if (tokens.length === 3){
+      // Ambigu : la 3e case est-elle une référence ou une unité ? Validé sur
+      // des exemples réels (température, pH, ratios patient/témoin...).
+      if (looksLikeRange(tokens[2])) [label, value, ref] = tokens;
+      else [label, unit, value] = tokens;
+    } else if (tokens.length === 4){
+      [label, unit, value, ref] = tokens;
+    } else {
+      console.warn('Ligne HTML non reconnue (ni 1, 2, 3 ni 4 cellules) :', tokens);
+      continue;
+    }
+
+    if (isIgnoredLabel(label)) continue;
+
+    const dateKey = currentDate ? (currentDate + (currentTime ? ' ' + currentTime : '')) : 'Date inconnue';
+    dateKeySet.add(dateKey);
+
+    const key = examKey(currentSection, currentSub, label);
+    if (!exams.has(key)) exams.set(key, { label, section: currentSection, sub: currentSub, values: new Map() });
+    exams.get(key).values.set(dateKey, { value, unit, ref, flag: null });
+  }
+
+  const dateKeys2 = [...dateKeySet].sort((a,b) => toSortableDate(a) - toSortableDate(b));
+  return { exams, dateKeys: dateKeys2 };
+}
+
 /* ============================================================================
    ÉTAT ET RENDU
    ============================================================================ */
@@ -375,7 +510,6 @@ function normalizeForMatch(s){
   return s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
 }
 
-
 // Renvoie un statut explicite plutôt qu'un simple trouvé/pas trouvé, pour que
 // generateSummary() puisse distinguer "n'existe pas" d'"existe en double,
 // précise avec @ Rubrique" — jamais choisir silencieusement entre les deux.
@@ -385,8 +519,10 @@ function findExamByName(name, qualifier){
   let candidates = [...PARSED.exams.values()].filter(data => normalizeForMatch(data.label) === target);
 
   if (!candidates.length){
-    // Repli par alias : le nom demandé et/ou le libellé réel du compte-rendu peuvent être des variantes l'un de l'autre (LABEL_ALIASES). 
-    // On élargit la recherche uniquement ici, à la lecture — les examens eux-mêmes restent distincts dans PARSED.exams (étape 0).
+    // Repli par alias : le nom demandé et/ou le libellé réel du compte-rendu
+    // peuvent être des variantes l'un de l'autre (LABEL_ALIASES). On élargit
+    // la recherche uniquement ici, à la lecture — les examens eux-mêmes
+    // restent distincts dans PARSED.exams (étape 0).
     const canonTarget = normalizeForMatch(resolveCanonical(name));
     candidates = [...PARSED.exams.values()].filter(data => normalizeForMatch(resolveCanonical(data.label)) === canonTarget);
   }
@@ -438,14 +574,14 @@ function buildTable(){
   let lastGroup = null;
   for (const data of exams){
     const group = data.section + (data.sub ? ' — ' + data.sub : '');
-    if (group !== lastGroup){
-      html += `<tr class="section-row"><td class="label">${group || '(non classé)'}</td>`;
-      for (let i = 0; i < dates.length; i++) {
-        html += '<td></td>';
-      }
-      html += '</tr>';
-      lastGroup = group;
-    }
+if (group !== lastGroup){
+  html += `<tr class="section-row"><td class="label">${group || '(non classé)'}</td>`;
+  for (let i = 0; i < dates.length; i++) {
+    html += '<td></td>';
+  }
+  html += '</tr>';
+  lastGroup = group;
+}
     html += `<tr><td class="label">${data.label}</td>`;
     for (const d of dates){
       const entry = data.values.get(d);
@@ -637,6 +773,7 @@ async function setAsDefaultTemplate(templateId, status) {
 
   if (error) console.error("Erreur de mise à jour :", error);
 }
+
 /* ============================================================================
    GESTION ALIAS
    ============================================================================ */
@@ -673,6 +810,7 @@ async function addLabelAlias(canonical, variant) {
     alert("Alias enregistré.");
   }
 }
+
 /* ============================================================================
    INTERFACE & SUPABASE PRESETS
    ============================================================================ */
@@ -756,10 +894,12 @@ function copyTableAsTSV(){
    INTERFACE
    ============================================================================ */
 
-document.getElementById('btn-parse').addEventListener('click', () => {
-  const text = document.getElementById('raw-input').value;
-  if (!text.trim()) return;
-  PARSED = parseReport(text);
+// Point d'entrée commun aux deux voies d'extraction (texte collé, fichier
+// HTML importé). Remplace systématiquement PARSED en entier plutôt que de
+// fusionner avec un résultat précédent — même logique que le bouton Analyser
+// avait déjà avant l'import HTML, gardée volontairement simple pour l'instant.
+function applyParsedResult(parsed){
+  PARSED = parsed;
   document.getElementById('result-area').style.display = 'block';
   document.getElementById('stats').textContent =
     `${PARSED.exams.size} examens distincts, ${PARSED.dateKeys.length} prélèvements datés.`;
@@ -778,6 +918,21 @@ Créatinine à {{Créatinine|valeur}} µmol/L soit DFG à {{DFG calculé par CKD
 Absence de syndrome inflammatoire biologique
 CPK dans les normes`;
   }
+}
+
+document.getElementById('btn-parse').addEventListener('click', () => {
+  const text = document.getElementById('raw-input').value;
+  if (!text.trim()) return;
+  applyParsedResult(parseReport(text));
+});
+
+document.getElementById('html-input').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => applyParsedResult(parseOrbisHtmlExport(reader.result));
+  reader.readAsText(file);
+  e.target.value = ''; // permet de réimporter le même fichier deux fois de suite
 });
 
 document.getElementById('chk-technical').addEventListener('change', () => { if (PARSED) buildTable(); });
@@ -789,10 +944,6 @@ document.getElementById('btn-copy-table').addEventListener('click', copyTableAsT
 document.getElementById('btn-generate').addEventListener('click', generateSummary);
 document.getElementById('btn-copy-summary').addEventListener('click', () => navigator.clipboard.writeText(document.getElementById('summary-output').value));
 
-document.getElementById('search-list').addEventListener('input', () => { if (PARSED) buildCompactList(); });
-document.getElementById('ref-date-list').addEventListener('change', () => { if (PARSED) buildCompactList(); });
-document.getElementById('chk-list-norms').addEventListener('change', () => { if (PARSED) buildCompactList(); });
-document.getElementById('btn-copy-list').addEventListener('click', () => navigator.clipboard.writeText(document.getElementById('list-output').value));
 document.getElementById('btn-add-alias')?.addEventListener('click', async () => {
   const variant = prompt('Libellé exact rencontré dans un compte-rendu (la variante) :');
   if (!variant) return;
@@ -800,6 +951,11 @@ document.getElementById('btn-add-alias')?.addEventListener('click', async () => 
   if (!canonical) return;
   await addLabelAlias(canonical.trim(), variant.trim());
 });
+
+document.getElementById('search-list').addEventListener('input', () => { if (PARSED) buildCompactList(); });
+document.getElementById('ref-date-list').addEventListener('change', () => { if (PARSED) buildCompactList(); });
+document.getElementById('chk-list-norms').addEventListener('change', () => { if (PARSED) buildCompactList(); });
+document.getElementById('btn-copy-list').addEventListener('click', () => navigator.clipboard.writeText(document.getElementById('list-output').value));
 
 // Bascule entre les trois onglets (Tableau / Liste / Résumé).
 const TABS = [
