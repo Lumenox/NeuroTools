@@ -3,9 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Extracteur de bilans biologiques ⭕rbis v1.0</title>
+<title>Extracteur de bilans biologiques ⭕rbis v1.2</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  
+
 <style>
   :root{
     --bg:#F5F6F2;
@@ -46,7 +46,10 @@
   .tabpanel{border:1px solid var(--line);border-radius:0 4px 4px 4px;background:var(--surface);padding:16px;}
   .hidden{display:none !important;}
   .table-controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px;}
-  input[type=text]{font-family:var(--sans);font-size:13px;padding:6px 10px;border:1px solid var(--line);border-radius:4px;min-width:220px;}
+  input[type=text],input[type=number]{font-family:var(--sans);font-size:13px;padding:6px 10px;border:1px solid var(--line);border-radius:4px;min-width:220px;}
+  input[type=number]{min-width:0;width:90px;}
+  details.panel summary{cursor:pointer;font-weight:600;font-size:13px;}
+  #layout-area{height:150px;margin-top:10px;}
   .table-wrap{overflow:auto;max-height:70vh;border:1px solid var(--line);border-radius:4px;}
   table{border-collapse:collapse;font-size:12px;white-space:nowrap;}
   th,td{border-bottom:1px solid var(--line);border-right:1px solid var(--line);padding:5px 9px;text-align:right;}
@@ -54,16 +57,16 @@
   td.label,th.label{text-align:left;white-space:normal;max-width:260px;position:sticky;left:0;background:var(--surface);z-index:1;font-family:var(--sans);}
   th.label{background:#F0F1EC;z-index:3;}
   tr.section-row td {
-  background: var(--accent-soft);
-  font-weight: 600;
-  color: var(--accent);
-}
-tr.section-row td.label {
-  background: var(--accent-soft); /* Assure le fond vert clair sur la colonne fixée */
-  position: sticky;
-  left: 0;
-  z-index: 1;
-}
+    background: var(--accent-soft);
+    font-weight: 600;
+    color: var(--accent);
+  }
+  tr.section-row td.label {
+    background: var(--accent-soft); /* Assure le fond vert clair sur la colonne fixée */
+    position: sticky;
+    left: 0;
+    z-index: 1;
+  }
   td.val{font-family:var(--mono);}
   td.flag-high{background:var(--high-bg);color:var(--high);}
   td.flag-low{background:var(--low-bg);color:var(--low);}
@@ -95,10 +98,27 @@ tr.section-row td.label {
   <div class="row">
     <button class="primary" id="btn-parse">Analyser</button>
     <label class="opt"><input type="checkbox" id="chk-technical" checked> Masquer les lignes techniques (PDF, identité biologiste, prélèvement…)</label>
+    <label class="opt"><input type="checkbox" id="chk-merge" checked> Fusionner les variantes de tube (« Sang héparine lithium », « Plasma Héparine (b vert) »…)</label>
     <label class="opt"><input type="checkbox" id="chk-order"> Ordre chronologique (plus ancien → plus récent)</label>
   </div>
   <div class="stats" id="stats"></div>
 </div>
+
+<details class="panel" id="layout-panel">
+  <summary>Ordre d'affichage personnalisé (tableau, liste, CSV)</summary>
+  <p class="hint">Une ligne par bloc, dans l'ordre voulu : <code>Titre : terme, terme, …</code>. Un terme est un morceau du nom de l'examen (<code>sodium</code>), un nom exact (<code>= Protéines</code>), un nom restreint à une rubrique ou une unité (<code>sodium @ sanguins</code>), une rubrique entière du laboratoire (<code>rubrique=HEMATOLOGIE</code>) ou <code>*</code> pour tout le reste. Les examens non reconnus vont à la fin, dans « Autres ». <code>#</code> commence un commentaire. Sans texte : ordre du laboratoire.</p>
+  <textarea id="layout-area" placeholder="Ex. :  Hématologie : rubrique=HEMATOLOGIE - CYTOLOGIE&#10;Ionogramme : sodium @ sanguins, potassium @ sanguins, chlorure"></textarea>
+  <div class="row">
+    <button class="primary" id="btn-layout-apply">Appliquer</button>
+    <button id="btn-layout-example">Insérer un exemple</button>
+    <button id="btn-layout-clear">Revenir à l'ordre du laboratoire</button>
+  </div>
+  <div class="row">
+    <select id="select-layout" style="flex:1"><option value="">-- Ordres partagés --</option></select>
+    <button type="button" id="btn-layout-share">💾 Partager cet ordre</button>
+  </div>
+  <div id="layout-warn" class="warn"></div>
+</details>
 
 <div id="result-area">
   <div class="tabs">
@@ -119,13 +139,35 @@ tr.section-row td.label {
   <div class="tabpanel hidden" id="tab-list">
     <div class="table-controls">
       <input type="text" id="search-list" placeholder="Filtrer un examen (ex : sodium, DFG, CRP…)">
-      <label class="opt">Date de référence :
+      <label class="opt">Mode :
+        <select id="list-mode">
+          <option value="single">Une date</option>
+          <option value="compare">Comparer deux dates (entrée → sortie)</option>
+        </select>
+      </label>
+      <label class="opt" id="wrap-ref-single">Date de référence :
         <select id="ref-date-list"></select>
       </label>
+      <label class="opt hidden" id="wrap-from">Entrée (à partir de) :
+        <select id="date-from-list"></select>
+      </label>
+      <label class="opt hidden" id="wrap-to">Sortie (jusqu'à) :
+        <select id="date-to-list"></select>
+      </label>
+    </div>
+    <div class="table-controls">
       <label class="opt"><input type="checkbox" id="chk-list-norms" checked> Afficher les normes</label>
+      <label class="opt"><input type="checkbox" id="chk-list-dates" checked> Afficher les dates de prélèvement</label>
+      <label class="opt" id="wrap-maxage">Âge maximal d'une valeur (jours) :
+        <input type="number" id="list-max-age" min="0" placeholder="illimité">
+      </label>
+      <span class="hidden" id="wrap-compare-opts" style="display:flex;gap:10px;align-items:center;">
+        <label class="opt"><input type="checkbox" id="chk-list-changed"> Seulement ce qui a changé</label>
+        <label class="opt"><input type="checkbox" id="chk-list-delta"> Afficher la variation (Δ)</label>
+      </span>
       <button id="btn-copy-list">Copier la liste</button>
     </div>
-    <p class="hint">Une ligne par examen, à la date choisie (ou la valeur disponible la plus proche antérieure). Pratique comme base brute avant de rédiger, sans passer par un modèle.</p>
+    <p class="hint">Une ligne par examen. <b>Une date</b> : valeur à la date choisie, ou la plus proche antérieure. <b>Comparer</b> : première valeur de l'intervalle (entrée) → dernière valeur (sortie). Les dates sont indiquées une fois dans le titre du bloc (prélèvement majoritaire) ; une valeur prélevée à un autre moment porte sa propre date entre crochets.</p>
     <textarea id="list-output" readonly style="height:60vh"></textarea>
   </div>
 
@@ -133,9 +175,9 @@ tr.section-row td.label {
     <div class="cols-2">
       <div>
         <h2 style="margin-top:0">Modèle de résumé</h2>
-        <p class="hint">Écris ton modèle librement, avec tes propres phrases d'interprétation. Insère une valeur avec <code>{{Nom exact de l'examen}}</code> (valeur + unité), <code>{{Nom|valeur}}</code> (valeur seule) ou <code>{{Nom|date}}</code> (date du prélèvement utilisé). Clique un examen dans la liste à droite pour insérer son nom exact.</p>
+        <p class="hint">Écris ton modèle librement, avec tes propres phrases d'interprétation. Insère une valeur avec <code>{{Nom exact de l'examen}}</code> (valeur + unité), <code>{{Nom|valeur}}</code> (valeur seule) ou <code>{{Nom|date}}</code> (date du prélèvement utilisé). Si le même nom existe sous plusieurs rubriques ou plusieurs unités, précise avec <code>{{Nom @ Rubrique}}</code> ou <code>{{Nom @ unité}}</code>. Clique un examen dans la liste à droite pour insérer son nom exact.</p>
         <textarea id="template-area"></textarea>
-        
+
         <div class="row" style="margin-bottom: 10px;">
           <label for="select-preset">Trame prédéfinie :</label>
           <select id="select-preset" style="flex: 1;">
@@ -143,7 +185,7 @@ tr.section-row td.label {
           </select>
           <button type="button" id="btn-save-cloud">💾 Partager ce modèle</button>
         </div>
-        
+
         <div class="row">
           <label class="opt">Date de référence :
             <select id="ref-date"></select>
@@ -166,22 +208,47 @@ tr.section-row td.label {
 </div>
 
 <script>
+/* ============================================================================
+   SOMMAIRE
+   ----------------------------------------------------------------------------
+    0. Connexion Supabase
+    1. Configuration (à adapter selon les formats rencontrés)
+    2. Utilitaires généraux
+    3. Magasin d'examens (structure commune aux deux parseurs)
+    4. Parseur « texte collé »
+    5. Parseur « export HTML » (3 phases : extraction → fusion → construction)
+    6. Couche d'affichage (noms nettoyés, fusion des tubes, lignes techniques)
+    7. Ordre personnalisé
+    8. État et rendu (tableau, liste d'insertion)
+    9. Génération du résumé
+   10. Liste compacte (une date / deux dates / dates de prélèvement)
+   11. Modèles, alias et ordres partagés (Supabase)
+   12. Exports
+   13. Interface (événements)
+   ============================================================================ */
+
+
+/* ============================================================================
+   0. CONNEXION SUPABASE
+   ============================================================================ */
+
 const SUPABASE_URL = 'https://yseaujinbdwxpcelsywr.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_7uC727-tO92zxGsAwCqBnA_E9oX_Xw8';
 const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
   db: { schema: 'neurotools' }
 });
-  
+
+
 /* ============================================================================
-   CONFIGURATION — à adapter selon le format des comptes-rendus rencontrés.
+   1. CONFIGURATION
    ============================================================================ */
 
-// Caractères de chiffres en exposant utilisés par les renvois de note de bas
-// de page (ex : "DFG calculé par C…¹" renvoie vers "¹ DFG calculé par CKD-EPI").
+// Chiffres en exposant utilisés par les renvois de note de bas de page
+// (ex : "DFG calculé par C…¹" renvoie vers "¹ DFG calculé par CKD-EPI").
 const SUPERSCRIPTS = {'⁰':'0','¹':'1','²':'2','³':'3','⁴':'4','⁵':'5','⁶':'6','⁷':'7','⁸':'8','⁹':'9'};
 
-// Motifs (regex, sur le libellé résolu) considérés comme des lignes "techniques"
-// et non des résultats biologiques : à compléter librement.
+// Libellés (regex, sur le libellé résolu) qui ne sont PAS des résultats
+// biologiques : lignes techniques, identité, mentions administratives.
 const IGNORE_LABEL_PATTERNS = [
   /^CR( - Pdf| Plateforme| Microbiologie)/i,
   /^Identit[ée] biologiste/i,
@@ -193,48 +260,84 @@ const IGNORE_LABEL_PATTERNS = [
   /^Attestation retour/i,
   /^Accus[ée] de r[ée]ception/i,
   /^Motif$/i,
-  // Spécifiques à l'import HTML (absents du copier-coller texte) :
+  // Spécifiques à l'export HTML (absents du copier-coller texte) :
   /^Patient$/i,
   /^Dossier$/i,
   /^Imprimé par /i,
+  /^M[ée]thode$/i,
+  /^Valid[ée] par/i,
+  /^Ex[ée]cutant/i,
+  /^UF demandeuse/i,
+  // Redondants avec la colonne « date/heure » du tableau :
+  /^Heure de pr[ée]l[èe]vement/i,
+  /^Date de pr[ée]l[èe]vement/i,
 ];
 
+// Un compte-rendu peut regrouper plusieurs prélèvements (ex : cinétique
+// pharmacologique) annoncés par une ligne « Heure de prélèvement ¦ ¦10:27 ».
+const SAMPLE_TIME_LABEL_RE = /^Heure de pr[ée]l[èe]vement/i;
+
 // Corrections cosmétiques d'unités tronquées par la largeur de colonne
-// (la troncature ne porte, dans ce cas, sur aucune note de bas de page).
+// (texte comme HTML). La comparaison se fait sur l'unité brute.
 const UNIT_FIXES = {
-  'mL/min/…': 'mL/min/1.73m²',
+  'mL/min/…':  'mL/min/1.73m²',
+  'mL/min/1,': 'mL/min/1.73m²',
+  '73m²':      'mL/min/1.73m²',
+  'mL/min/1,73m²': 'mL/min/1.73m²',   // export HTML : virgule décimale
+  'mOsmol/…': 'mOsmol/kg',            // texte collé : tronqué par la largeur de colonne (l'export HTML donne mOsmol/kg)
 };
 
-// Synonymes de libellés : la clé est le nom "canonique" à utiliser dans tes
-// templates ; chaque entrée liste les variantes déjà rencontrées qui désignent
-// le même examen. N'affecte JAMAIS le Tableau ni la Liste (qui gardent le
-// libellé brut du compte-rendu, étape 0 oblige) — seulement la résolution des
-// placeholders {{...}} du Résumé. À compléter librement, sans toucher au
-// reste du code.
-// Alias intégrés en dur : utilisés tant que la table Supabase n'a pas encore
-// répondu, et comme filet si le réseau est indisponible. fetchLabelAliases()
-// (section GESTION ALIAS) les fusionne avec ceux stockés dans Supabase au
-// chargement de la page.
+// Synonymes de libellés : la clé est le nom "canonique" à utiliser dans les
+// templates ; chaque entrée liste les variantes qui désignent le même examen.
+// N'affecte JAMAIS le Tableau ni la Liste (qui gardent le libellé brut du
+// compte-rendu) — seulement la résolution des placeholders {{...}}.
+// Alias intégrés en dur : utilisés tant que la table Supabase n'a pas répondu,
+// et comme filet si le réseau est indisponible. fetchLabelAliases() les
+// fusionne avec ceux stockés dans Supabase.
 const LABEL_ALIASES_BUILTIN = {
   'Créatininémie': ['Créatininémie héparine lithium', 'Créatininémie sur tube sec'],
 };
 let LABEL_ALIASES = { ...LABEL_ALIASES_BUILTIN };
 
-// Si `text` est une variante connue (ou le nom canonique lui-même) d'une
-// entrée de LABEL_ALIASES, renvoie ce nom canonique ; sinon renvoie `text`
-// tel quel (donc un libellé sans alias connu se comporte exactement comme
-// avant — ce n'est qu'un repli).
-function resolveCanonical(text){
-  const target = normalizeForMatch(text);
-  for (const canon in LABEL_ALIASES){
-    if (normalizeForMatch(canon) === target) return canon;
-    if (LABEL_ALIASES[canon].some(v => normalizeForMatch(v) === target)) return canon;
-  }
-  return text;
-}
+// Repères visuels de l'export HTML Orbis (impression/PDF).
+const HTML_LAYOUT = {
+  titleBg: '#CCCCCC',   // bandeau gris : titre de rubrique / sous-rubrique
+  stampBg: '#DBDBDB',   // cellule d'en-tête : date ou heure du prélèvement
+  labelCol: 1,          // le libellé d'un résultat commence à cette colonne…
+  labelSpan: 4,         // …et occupe cette largeur
+  unitMaxSpan: 2,       // largeur maximale d'une cellule « unité »
+  refMinOffset: 5,      // une cellule située à ≥ 5 colonnes de la fin du libellé est une référence
+};
+
+// ---- Couche d'affichage (section 6) --------------------------------------------
+// Un suffixe de libellé est reconnu comme descripteur de tube s'il est porté par
+// au moins DESCRIPTOR_MIN_ANALYTES analytes distincts, dont au moins
+// DESCRIPTOR_MIN_SUBSTITUTABLE existent aussi avec un autre descripteur ou sans.
+// Plus ces seuils sont hauts, plus on est prudent (moins de nettoyage, jamais de fausse fusion).
+const DESCRIPTOR_MIN_ANALYTES = 4;
+const DESCRIPTOR_MIN_SUBSTITUTABLE = 3;
+const DESCRIPTOR_MAX_WORDS = 6;       // longueur maximale d'un descripteur (en mots)
+// Un descripteur plus long qu'un autre descripteur retenu (« patient B_SER_VEIN » contre
+// « B_SER_VEIN ») n'est préféré que s'il couvre au moins cette part de ses analytes ;
+// sinon le mot supplémentaire est un morceau du nom de l'analyte et reste affiché.
+const DESCRIPTOR_EXTEND_RATIO = 0.8;
+
+// Unités écrites différemment mais strictement équivalentes (constantes physiques,
+// pas une liste à maintenir). Clés : forme normalisée par normUnit().
+const UNIT_EQUIVALENTS = {
+  'giga/l': 'x10*9/l',
+  'téra/l': 'x10*12/l',
+  'tera/l': 'x10*12/l',
+};
+
+// Deux valeurs d'un même bloc sont « prélevées ensemble » si leurs heures sont
+// distantes de moins que ceci (des tubes du même matin : 15:15 et 15:16).
+const SAME_DRAW_WINDOW_MIN = 60;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 
 /* ============================================================================
-   MOTEUR DE PARSING
+   2. UTILITAIRES GÉNÉRAUX
    ============================================================================ */
 
 const DATE_RE = /^\d{2}\/\d{2}\/\d{2}$/;
@@ -244,14 +347,12 @@ const TRAILING_FOOTNOTE_RE = /…([⁰¹²³⁴⁵⁶⁷⁸⁹]+)\s*$/;
 
 function supToDigits(s){ return s.split('').map(c => SUPERSCRIPTS[c] || '').join(''); }
 
-// Un même libellé (ex. "Sodium") peut exister sous plusieurs rubriques
-// distinctes (sang, urines, LCR...), avec des valeurs totalement différentes.
-// L'identité d'un examen est donc (rubrique, sous-rubrique, libellé), jamais
-// le libellé seul — sous peine de fusionner silencieusement deux examens
-// différents sous la même ligne. \u241F est un séparateur improbable dans un
-// texte médical, utilisé uniquement comme clé technique interne (jamais affiché).
-function examKey(section, sub, label){
-  return section + '\u241F' + sub + '\u241F' + label;
+function escapeHtml(s){
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function normalizeForMatch(s){
+  return s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
 }
 
 function isAllCaps(s){
@@ -263,28 +364,97 @@ function isIgnoredLabel(label){
   return IGNORE_LABEL_PATTERNS.some(re => re.test(label));
 }
 
-// Résout un libellé ou une valeur tronqués par un renvoi de note de bas de page.
+/** Nombre décimal strict ("4,2" ou "4.2") ou null. */
+function parseNumber(s){
+  const t = String(s).trim();
+  return /^[-+]?\d+(?:[.,]\d+)?$/.test(t) ? parseFloat(t.replace(',', '.')) : null;
+}
+
+/** Résout un libellé ou une valeur tronqués par un renvoi de note de bas de page. */
 function resolveFootnote(text, footnotes){
   const m = text.match(TRAILING_FOOTNOTE_RE);
   if (!m) return text;
-  const digits = supToDigits(m[1]); // "¹⁰" -> "10", une seule clé, pas deux
+  const digits = supToDigits(m[1]); // "¹⁰" -> "10" : une seule clé, pas deux
   return footnotes[digits] !== undefined ? footnotes[digits] : text.replace(TRAILING_FOOTNOTE_RE, '');
 }
 
-/**
- * Analyse le texte collé et renvoie :
- *  - exams: Map(libellé -> { section, sub, values: Map(dateKey -> {value, flag, unit, ref}) })
- *  - dateKeys: liste des dates/heures rencontrées, triées chronologiquement
- */
-function parseReport(text){
-  const cleanLines = text.split(/\r?\n/).map(l => l.replace(/\r$/, ''));
+/** Unité corrigée (troncatures connues). */
+function fixUnit(unit){ return UNIT_FIXES[unit] || unit; }
 
-  // Découpage en blocs (un bloc = un compte-rendu d'examen, entre deux lignes de soulignés).
-  // Les renvois de note de bas de page sont numérotés par bloc : on les résout donc
-  // en deux passes, bloc par bloc, pour pouvoir référencer une note définie plus bas.
+/** Forme comparable d'une unité : "mmol/L" == "mmol/l", "1,73" == "1.73". */
+function normUnit(unit){ return (unit || '').toLowerCase().replace(/\s+/g, '').replace(/,/g, '.'); }
+
+/** "dd/mm/yy [hh:mm]" -> timestamp (pour trier et comparer). */
+function toSortableDate(key){
+  const m = key.match(/^(\d{2})\/(\d{2})\/(\d{2})(?:\s+(\d{2}):(\d{2}))?/);
+  if (!m) return 0;
+  const [, dd, mm, yy, hh, mi] = m;
+  return new Date(2000 + (+yy), (+mm) - 1, +dd, +(hh||0), +(mi||0)).getTime();
+}
+
+function makeDateKey(date, time){
+  return date ? (date + (time ? ' ' + time : '')) : 'Date inconnue';
+}
+
+
+/* ============================================================================
+   3. MAGASIN D'EXAMENS  (structure commune aux deux parseurs)
+   ----------------------------------------------------------------------------
+   Identité d'un examen = (rubrique, sous-rubrique, libellé, unité).
+     - La rubrique/sous-rubrique : un même libellé ("Sodium") existe pour le
+       sang, les urines, le LCR… avec des valeurs sans rapport.
+     - L'unité : un même libellé peut être rendu dans deux unités le même jour
+       (neutrophiles en % et en x10*9/L). Sans l'unité dans la clé, la seconde
+       valeur écrasait silencieusement la première.
+   \u241F est un séparateur improbable dans un texte médical : clé technique
+   interne, jamais affichée.
+   ============================================================================ */
+
+function examKey(section, sub, label, unit){
+  return [section, sub, label, normUnit(unit)].join('\u241F');
+}
+
+function createStore(){
+  return { exams: new Map(), dateKeys: new Set(), collisions: 0 };
+}
+
+/**
+ * Enregistre un résultat. `img` (facultatif) est la source de l'image-drapeau
+ * de l'export HTML ; elle est convertie en +/- par inferFlagsFromImages().
+ */
+function addResult(store, r){
+  const unit = fixUnit(r.unit || '');
+  const key = examKey(r.section, r.sub, r.label, unit);
+  if (!store.exams.has(key)){
+    store.exams.set(key, { label: r.label, unit, section: r.section, sub: r.sub, values: new Map() });
+  }
+  const exam = store.exams.get(key);
+  const previous = exam.values.get(r.dateKey);
+  if (previous && previous.value !== r.value) store.collisions++; // deux valeurs distinctes, même case : on garde la dernière
+  exam.values.set(r.dateKey, { value: r.value, flag: r.flag || null, unit, ref: r.ref || '', img: r.img || null });
+  store.dateKeys.add(r.dateKey);
+}
+
+/** Clôt le magasin : tri chronologique des dates, forme finale { exams, dateKeys }. */
+function finalizeStore(store){
+  const dateKeys = [...store.dateKeys].sort((a, b) => toSortableDate(a) - toSortableDate(b));
+  return { exams: store.exams, dateKeys, collisions: store.collisions };
+}
+
+
+/* ============================================================================
+   4. PARSEUR « TEXTE COLLÉ »
+   ----------------------------------------------------------------------------
+   Format : blocs séparés par des lignes de soulignés ; lignes de données
+   "Libellé ¦ Unité ¦ Valeur [±] ¦ Référence" ; renvois de notes en exposant.
+   ============================================================================ */
+
+/** Découpe le texte en blocs (un bloc = tout ce qui sépare deux lignes de soulignés). */
+function splitBlocks(text){
+  const lines = text.split(/\r?\n/).map(l => l.replace(/\r$/, ''));
   const blocks = [];
   let cur = [];
-  for (const l of cleanLines){
+  for (const l of lines){
     if (/^_{10,}$/.test(l.trim())){
       if (cur.length) blocks.push(cur);
       cur = [];
@@ -293,48 +463,78 @@ function parseReport(text){
     }
   }
   if (cur.length) blocks.push(cur);
+  return blocks;
+}
 
-  const exams = new Map();
-  const dateKeySet = new Set();
+/** Notes de bas de page d'un bloc : { "1": "texte", "10": "texte" }. La numérotation est propre à chaque bloc. */
+function collectFootnotes(blockLines){
+  const footnotes = {};
+  for (const raw of blockLines){
+    const t = raw.trim();
+    if (t.includes('¦')) continue;
+    const m = t.match(FOOTNOTE_LINE_RE);
+    if (m) footnotes[supToDigits(m[1])] = m[2];
+  }
+  return footnotes;
+}
 
-  // La date, l'heure et la rubrique/sous-rubrique courantes se poursuivent
-  // d'un bloc au suivant : un même compte-rendu est en réalité scindé en un
-  // bloc d'en-tête (date/heure) puis un bloc de données par la ligne de
-  // séparation qui les sépare. Seules les notes de bas de page sont propres
-  // à chaque bloc (leur numérotation recommence à chaque fois).
+/**
+ * Vrai si un même bloc annonce plusieurs heures de prélèvement distinctes
+ * (cinétique). Dans ce cas, chaque ligne « Heure de prélèvement » ouvre une
+ * nouvelle colonne horaire ; sinon, l'en-tête du bloc fait foi.
+ */
+function hasSeveralSampleTimes(blockLines, footnotes){
+  const times = new Set();
+  for (const raw of blockLines){
+    if (!raw.includes('¦')) continue;
+    const f = raw.split('¦').map(x => x.trim());
+    const label = resolveFootnote(f[0] || '', footnotes);
+    const value = resolveFootnote(f[2] || '', footnotes).trim();
+    if (SAMPLE_TIME_LABEL_RE.test(label) && TIME_RE.test(value)) times.add(value);
+  }
+  return times.size > 1;
+}
+
+/** Une ligne sans "¦" est-elle un titre de rubrique / sous-rubrique ? */
+function looksLikeHeading(trimmed){
+  // Exclut : les amorces de commentaire (finissant par . , :), les codes
+  // administratifs (contenant "_") et le tiret isolé de "NON CONFORMITÉS / -".
+  const wordCount = trimmed.split(/\s+/).length;
+  return trimmed.length < 60 && wordCount <= 6
+    && trimmed !== '-'
+    && !/[.,:]$/.test(trimmed)
+    && !trimmed.includes('_');
+}
+
+/**
+ * Analyse le texte collé et renvoie { exams, dateKeys, collisions }.
+ *  - exams : Map(clé -> { label, unit, section, sub, values: Map(dateKey -> {value, flag, unit, ref}) })
+ */
+function parseReport(text){
+  const store = createStore();
+
+  // La date, l'heure et la rubrique courantes se poursuivent d'un bloc au
+  // suivant (un compte-rendu est scindé en bloc d'en-tête puis bloc de données).
   let currentDate = null, currentTime = null;
   let currentSection = '', currentSub = '';
 
-  for (const blockLines of blocks){
-    // Passe 1 : collecte des notes de bas de page du bloc.
-    const footnotes = {};
-    for (const raw of blockLines){
-      const t = raw.trim();
-      if (t.includes('¦')) continue;
-      const m = t.match(FOOTNOTE_LINE_RE);
-      if (m){
-        // Un renvoi comme "¹⁰" est le nombre 10, pas les chiffres 1 et 0
-        // séparément — une seule clé par renvoi, jamais une par caractère
-        // (sinon la note ³¹ écrase silencieusement les notes ¹ et ³).
-        const digits = supToDigits(m[1]);
-        footnotes[digits] = m[2];
-      }
-    }
+  for (const blockLines of splitBlocks(text)){
+    const footnotes = collectFootnotes(blockLines);
+    const severalTimes = hasSeveralSampleTimes(blockLines, footnotes);
 
-    // Passe 2 : extraction des données du bloc.
     for (const raw of blockLines){
       const trimmed = raw.trim();
       if (!trimmed) continue;
 
+      // ---- Ligne structurée (avec "¦") -----------------------------------
       if (trimmed.includes('¦')){
         const fields = raw.split('¦').map(f => f.trim());
 
-        // Ligne d'en-tête du bloc (identifiant, date, "Valeurs de") : capture la date.
-        let isDateHeader = false;
-        for (const f of fields) if (DATE_RE.test(f)) { currentDate = f; isDateHeader = true; }
-        if (isDateHeader) continue;
+        // En-tête du bloc : "identifiant ¦ date ¦ Valeurs de". La date est en 2ᵉ champ ;
+        // une ligne "Date de prélèvement ¦ ¦ 02/06/23" n'est PAS un en-tête.
+        if (DATE_RE.test(fields[1] || '')){ currentDate = fields[1]; continue; }
 
-        // Ligne d'en-tête de colonnes ("Analyse | Unité | 06:00 | réf.") : capture l'heure.
+        // En-tête de colonnes ("Analyse ¦ Unité ¦ 06:00 ¦ réf.") : capture l'heure.
         if (fields[0] === 'Analyse' || fields[1] === 'Unité' || fields[2] === 'Complet'){
           for (const f of fields) if (TIME_RE.test(f)) currentTime = f;
           continue;
@@ -343,10 +543,18 @@ function parseReport(text){
         let label = fields[0] || '';
         let unit = fields[1] || '';
         let valueRaw = fields[2] || '';
-        let ref = fields[3] || '';
+        const ref = fields[3] || '';
         if (!label) continue;
 
         label = resolveFootnote(label, footnotes);
+
+        // Prélèvements multiples dans un même compte-rendu : cette ligne ouvre
+        // une nouvelle colonne horaire pour les résultats qui suivent.
+        if (severalTimes && SAMPLE_TIME_LABEL_RE.test(label)){
+          const t = resolveFootnote(valueRaw, footnotes).trim();
+          if (TIME_RE.test(t)) currentTime = t;
+        }
+
         if (isIgnoredLabel(label)) continue;
 
         // Séparation valeur / drapeau anormal ("+"/"-" isolé en fin de champ).
@@ -356,187 +564,761 @@ function parseReport(text){
         valueRaw = resolveFootnote(valueRaw.trim(), footnotes).trim();
         if (!valueRaw) continue;
 
-        unit = UNIT_FIXES[unit] || unit;
-
-        const dateKey = currentDate ? (currentDate + (currentTime ? ' ' + currentTime : '')) : 'Date inconnue';
-        dateKeySet.add(dateKey);
-
-        const key = examKey(currentSection, currentSub, label);
-        if (!exams.has(key)) exams.set(key, { label, section: currentSection, sub: currentSub, values: new Map() });
-        exams.get(key).values.set(dateKey, { value: valueRaw, flag, unit, ref });
+        addResult(store, {
+          section: currentSection, sub: currentSub, label, unit, ref, flag,
+          value: valueRaw, dateKey: makeDateKey(currentDate, currentTime),
+        });
         continue;
       }
 
-      // Note de bas de page : déjà collectée en passe 1, on l'ignore ici.
+      // ---- Note de bas de page : déjà collectée -----------------------------
       if (FOOTNOTE_LINE_RE.test(trimmed)) continue;
 
-      // Heuristique de repérage des titres de rubrique / sous-rubrique.
-      // Exclut en plus :
-      //  - les lignes finissant par ":" (ex. "Attention :", "Interprétation
-      //    Troponine T :") — ce sont des amorces de commentaire, jamais de
-      //    vrais titres dans ce format ;
-      //  - les lignes contenant "_" (ex. "HMN_BG_BIOTINE") — ce sont des
-      //    codes administratifs/protocoles, jamais des titres non plus.
-      // Sans ces deux exclusions, une telle ligne écrase silencieusement la
-      // rubrique ou sous-rubrique en cours pour tous les examens suivants du
-      // bloc, jusqu'au prochain vrai titre.
-      const wordCount = trimmed.split(/\s+/).length;
-      const looksLikeHeading = trimmed.length < 60 && wordCount <= 6
-        && !/[.,:]$/.test(trimmed)
-        && !trimmed.includes('_');
-      if (looksLikeHeading){
+      // ---- Titre de rubrique / sous-rubrique --------------------------------
+      if (looksLikeHeading(trimmed)){
         if (isAllCaps(trimmed)){ currentSection = trimmed; currentSub = ''; }
         else { currentSub = trimmed; }
       }
     }
   }
-
-  // Tri chronologique des dates (format dd/mm/yy [hh:mm]).
-  function toSortableDate(key){
-    const m = key.match(/^(\d{2})\/(\d{2})\/(\d{2})(?:\s+(\d{2}):(\d{2}))?/);
-    if (!m) return 0;
-    const [, dd, mm, yy, hh, mi] = m;
-    return new Date(2000 + (+yy), (+mm) - 1, +dd, +(hh||0), +(mi||0)).getTime();
-  }
-  const dateKeys = [...dateKeySet].sort((a,b) => toSortableDate(a) - toSortableDate(b));
-
-  return { exams, dateKeys };
+  return finalizeStore(store);
 }
 
-function looksLikeRange(s){
-  return /^[<>]/.test(s) || /\d.*-.*\d/.test(s);
+
+/* ============================================================================
+   5. PARSEUR « EXPORT HTML »
+   ----------------------------------------------------------------------------
+   L'export est une mise en page imprimable : les résultats se lisent par la
+   POSITION des cellules (colspan), pas par leur nombre. Trois phases :
+     5.1  extractHtmlRows()         DOM -> lignes typées (date, titre, résultat…)
+     5.2  mergePageBreakFragments() recolle les lignes coupées par un saut de page
+     5.3  buildStoreFromRows()      lignes typées -> magasin d'examens (+ drapeaux)
+   Contrairement au texte collé, l'export contient aussi les examens
+   "En cours" / "En attente".
+   ============================================================================ */
+
+/* ---- 5.1 Extraction : DOM -> lignes typées -------------------------------- */
+
+/**
+ * Les valeurs et leurs marqueurs de renvoi ("1)", "2)"…) sont posés par des
+ * tableaux imbriqués dans des <div> positionnés : ce sont des sous-tables de
+ * mise en page, pas des lignes de contenu. Seules comptent les lignes qui ne
+ * sont dans AUCUN <div> positionné (absolute OU relative).
+ */
+function findNestedLayoutRows(doc){
+  return new Set(doc.querySelectorAll('div[style*="position"] tr'));
+}
+
+function cellBackground(td){
+  const m = (td.getAttribute('style') || '').match(/background-color:\s*(#[0-9a-f]{3,6})/i);
+  return m ? m[1].toUpperCase() : '';
+}
+
+/** Texte d'une cellule, sans le marqueur de renvoi superposé, espaces normalisés. */
+function cellText(td){
+  let node = td;
+  if (td.querySelector('div, br')){
+    node = td.cloneNode(true);
+    node.querySelectorAll('div[style*="pointer-events: none"]').forEach(n => n.remove()); // marqueur "1)"
+    node.querySelectorAll('br').forEach(br => br.replaceWith(' '));
+    node.querySelectorAll('div, p, tr, td').forEach(el => el.append(' ')); // évite "…:Adultes > 10g" collés
+  }
+  return node.textContent.replace(/[\s\u00a0]+/g, ' ').trim();
+}
+
+/** Cellules non vides d'une ligne, avec leur colonne de départ et leur largeur. */
+function readCells(tr){
+  const cells = [];
+  let col = 0;
+  for (const td of tr.children){
+    if (td.tagName !== 'TD') continue;
+    const span = parseInt(td.getAttribute('colspan') || '1', 10);
+    const text = cellText(td);
+    const img = td.querySelector('img');
+    if (text || img) cells.push({ col, span, bg: cellBackground(td), text, imgSrc: img ? img.getAttribute('src') : null });
+    col += span;
+  }
+  return cells;
 }
 
 /**
- * Analyse un export HTML (impression/PDF) Orbis et renvoie la même forme
- * que parseReport() : { exams, dateKeys }. Toute la suite de l'outil
- * (Tableau, Liste, Résumé) consomme cette forme sans savoir d'où elle vient.
- *
- * Contrairement au texte copié-collé, cet export contient aussi les examens
- * "En cours"/"En attente" — c'est tout l'intérêt de cette voie d'entrée.
- *
- * Limite connue, non résolue : l'encodage d'un résultat anormal (+/-) n'a pas
- * été identifié dans cet export (aucun exemple disponible à ce jour). Les
- * valeurs importées par ce chemin n'auront donc jamais de surlignage dans le
- * Tableau. Si tu tombes sur un export contenant un résultat flagué, c'est ici
- * qu'il faudra regarder.
+ * Lit une ligne de résultat. Les rôles se déduisent de la position, relative à
+ * la fin du libellé (la grille varie d'une page à l'autre) :
+ *   - unité     : cellule accolée au libellé, étroite ;
+ *   - valeur    : cellule proche (moins de 5 colonnes après le libellé) ;
+ *   - référence : cellule éloignée (5 colonnes ou plus après le libellé).
+ * Une cellule vide n'est donc jamais prise pour une autre : une ligne sans
+ * valeur (résultat non rendu) garde sa référence dans la colonne référence.
  */
-function parseOrbisHtmlExport(html){
-  const doc = new DOMParser().parseFromString(html, 'text/html');
+function parseResultCells(cells){
+  const [labelCell] = cells;
+  const labelEnd = labelCell.col + labelCell.span;
+  const texts = cells.slice(1).filter(c => c.text);
+  let k = 0, unit = '', value = '', ref = '';
 
-  const exams = new Map();
-  const dateKeySet = new Set();
-  let currentDate = null, currentTime = null;
-  let currentSection = '', currentSub = '';
+  if (texts[k] && texts[k].col === labelEnd && texts[k].span <= HTML_LAYOUT.unitMaxSpan){ unit = texts[k].text; k++; }
+  if (texts[k] && texts[k].col - labelEnd < HTML_LAYOUT.refMinOffset){ value = texts[k].text; k++; }
+  if (texts[k] && texts[k].col - labelEnd >= HTML_LAYOUT.refMinOffset){ ref = texts[k].text; }
 
-  for (const tr of doc.querySelectorAll('tr')){
-    // Ignore les <tr> imbriqués dans un div position:absolute : ce sont des
-    // sous-tables de positionnement visuel (utilisées pour aligner la valeur
-    // d'un résultat dans sa cellule), pas des lignes de contenu à part
-    // entière — leur texte est déjà inclus dans le textContent de la ligne
-    // englobante. Sans ce filtre, chaque résultat génère une fausse ligne
-    // supplémentaire (juste sa valeur) prise à tort pour un titre de rubrique.
-    let ancestor = tr.parentElement, isNestedPositioning = false;
-    while (ancestor){
-      if (ancestor.tagName === 'DIV' && /position:\s*absolute/.test(ancestor.getAttribute('style') || '')){
-        isNestedPositioning = true;
-        break;
-      }
-      ancestor = ancestor.parentElement;
-    }
-    if (isNestedPositioning) continue;
+  const imgCell = cells.find(c => c.imgSrc);
+  return { kind: 'result', label: labelCell.text, unit, value, ref, img: imgCell ? imgCell.imgSrc : null };
+}
 
-    const tokens = [...tr.children]
-      .filter(td => td.tagName === 'TD')
-      .map(td => td.textContent.trim())
-      .filter(Boolean);
-    if (!tokens.length) continue;
-
-    // Ligne d'en-tête de prélèvement ("Prélevé le" | date | ...) : capture la date.
-    if (tokens.some(t => DATE_RE.test(t))){
-      currentDate = tokens.find(t => DATE_RE.test(t));
-      continue;
-    }
-    // Ligne d'en-tête d'heure, isolée sur sa propre ligne.
-    if (tokens.length <= 2 && tokens.some(t => TIME_RE.test(t))){
-      currentTime = tokens.find(t => TIME_RE.test(t));
-      continue;
-    }
-
-    // Bandeau grisé à une seule case : titre de rubrique (tout en majuscules)
-    // ou de sous-rubrique (sinon) — même heuristique que parseReport().
-    if (tokens.length === 1){
-      if (isAllCaps(tokens[0])){ currentSection = tokens[0]; currentSub = ''; }
-      else { currentSub = tokens[0]; }
-      continue;
-    }
-
-    let label, unit = '', value, ref = '';
-    if (tokens.length === 2){
-      [label, value] = tokens; // couvre notamment "En cours" / "En attente"
-    } else if (tokens.length === 3){
-      // Ambigu : la 3e case est-elle une référence ou une unité ? Validé sur
-      // des exemples réels (température, pH, ratios patient/témoin...).
-      if (looksLikeRange(tokens[2])) [label, value, ref] = tokens;
-      else [label, unit, value] = tokens;
-    } else if (tokens.length === 4){
-      [label, unit, value, ref] = tokens;
-    } else {
-      console.warn('Ligne HTML non reconnue (ni 1, 2, 3 ni 4 cellules) :', tokens);
-      continue;
-    }
-
-    if (isIgnoredLabel(label)) continue;
-
-    const dateKey = currentDate ? (currentDate + (currentTime ? ' ' + currentTime : '')) : 'Date inconnue';
-    dateKeySet.add(dateKey);
-
-    const key = examKey(currentSection, currentSub, label);
-    if (!exams.has(key)) exams.set(key, { label, section: currentSection, sub: currentSub, values: new Map() });
-    exams.get(key).values.set(dateKey, { value, unit, ref, flag: null });
+/** Type d'une ligne : stamp-date | stamp-time | footer | title | result | other. */
+function classifyHtmlRow(cells){
+  const dateCell = cells.find(c => c.bg === HTML_LAYOUT.stampBg && DATE_RE.test(c.text));
+  if (dateCell){
+    // "N° Réf. Labo.: 2306B021157 …" : identifie le compte-rendu, répété sur chaque page.
+    const idCell = cells.find(c => /N° Réf\. Labo\./.test(c.text));
+    const id = idCell && idCell.text.match(/N° Réf\. Labo\.\s*:\s*([A-Za-z0-9]+)/);
+    return { kind: 'stamp-date', value: dateCell.text, labId: id ? id[1] : '' };
   }
 
-  const dateKeys2 = [...dateKeySet].sort((a,b) => toSortableDate(a) - toSortableDate(b));
-  return { exams, dateKeys: dateKeys2 };
+  const timeCell = cells.find(c => c.bg === HTML_LAYOUT.stampBg && TIME_RE.test(c.text));
+  if (timeCell) return { kind: 'stamp-time', value: timeCell.text };
+
+  if (/^Imprimé par /.test(cells[0].text)) return { kind: 'footer' };
+
+  if (cells.length === 1 && cells[0].bg === HTML_LAYOUT.titleBg) return { kind: 'title', text: cells[0].text };
+
+  const first = cells[0];
+  if (cells.length >= 2 && first.text && first.col === HTML_LAYOUT.labelCol && first.span === HTML_LAYOUT.labelSpan){
+    return parseResultCells(cells);
+  }
+  return { kind: 'other' };
 }
+
+function extractHtmlRows(doc){
+  const rows = [];
+  const nested = findNestedLayoutRows(doc);
+  for (const tr of doc.querySelectorAll('tr')){
+    if (nested.has(tr)) continue;
+    const cells = readCells(tr);
+    if (cells.length) rows.push(classifyHtmlRow(cells));
+  }
+  return rows;
+}
+
+
+/* ---- 5.2 Fusion des lignes coupées par un saut de page --------------------- */
+/*
+ * Quand un résultat tombe sur un saut de page, le bas de page porte le début
+ * du libellé tronqué ("Potassium Plasma") et le haut de page suivant répète
+ * TOUTE la ligne (unité, valeur, référence) avec la fin du libellé
+ * ("Héparine (b vert)"). Sans fusion, le même résultat apparaît deux fois,
+ * sous deux libellés incomplets.
+ */
+
+function isRealResult(r){ return r.kind === 'result' && !isIgnoredLabel(r.label); }
+
+function sameMeasure(a, b){
+  return a.value !== '' && a.unit === b.unit && a.value === b.value && a.ref === b.ref;
+}
+
+/** Paires (indice du bas de page, indice du haut de page) répétant la même mesure. */
+function findPageBreakCandidates(rows){
+  const pairs = [];
+  let prev = -1, sawFooter = false;
+  rows.forEach((r, i) => {
+    if (r.kind === 'footer'){ if (prev >= 0) sawFooter = true; return; }
+    if (r.kind === 'title'){ prev = -1; sawFooter = false; return; }
+    if (!isRealResult(r)) return; // en-têtes de page, lignes techniques : transparents
+    if (prev >= 0 && sawFooter && sameMeasure(rows[prev], r)) pairs.push([prev, i]);
+    prev = i; sawFooter = false;
+  });
+  return pairs;
+}
+
+function mergePageBreakFragments(rows){
+  const pairs = findPageBreakCandidates(rows);
+  if (!pairs.length) return rows;
+
+  // Libellés « sûrs » : ceux des lignes qui ne sont pas des fragments.
+  const inPair = new Set(pairs.flat());
+  const knownLabels = new Set(rows
+    .filter((r, i) => isRealResult(r) && !inPair.has(i))
+    .map(r => normalizeForMatch(r.label)));
+
+  for (const [p, c] of pairs){
+    const head = rows[p], tail = rows[c];
+    // La suite répète parfois le libellé en entier ("Prolactine" / "Prolactine Sang sur tube…").
+    const merged = tail.label.startsWith(head.label) ? tail.label : head.label + ' ' + tail.label;
+
+    // Fusion acceptée si le libellé recomposé est connu par ailleurs, ou si ni
+    // l'un ni l'autre morceau n'est un libellé connu (donc ce sont bien des
+    // fragments). Refusée pour deux examens distincts aux valeurs identiques
+    // (ex : ASAT puis ALAT, tous deux 22 U/L).
+    const strong = knownLabels.has(normalizeForMatch(merged));
+    const weak = !knownLabels.has(normalizeForMatch(head.label)) && !knownLabels.has(normalizeForMatch(tail.label));
+    if (strong || weak){
+      head.kind = 'merged';   // la ligne du bas de page disparaît…
+      tail.label = merged;    // …la ligne du haut de page porte le libellé complet
+    }
+  }
+  return rows;
+}
+
+
+/* ---- 5.3 Construction du magasin ------------------------------------------- */
+
+/**
+ * Le drapeau anormal est une image (une pour « + », une pour « − »), dont le
+ * nom de fichier change d'un export à l'autre. On déduit le sens de chaque
+ * image en comparant les valeurs qu'elle accompagne à leur référence : seule
+ * une valeur anormale porte un drapeau, donc "<14" => forcément trop haut,
+ * ">90" => trop bas, "12-16" => selon que la valeur dépasse l'une ou l'autre borne.
+ */
+function abnormalDirection(value, ref){
+  const v = parseNumber(value);
+  if (v === null || !ref) return 0;
+  if (/^<\s*=?\s*-?\d/.test(ref)) return +1;
+  if (/^>\s*=?\s*-?\d/.test(ref)) return -1;
+  const range = ref.match(/^(-?\d+(?:[.,]\d+)?)\s*-\s*(-?\d+(?:[.,]\d+)?)$/);
+  if (range){
+    const lo = parseNumber(range[1]), hi = parseNumber(range[2]);
+    if (v > hi) return +1;
+    if (v < lo) return -1;
+  }
+  return 0;
+}
+
+/** Remplace entry.img par entry.flag ('+', '-' ou null) pour tous les résultats de l'export. */
+function inferFlagsFromImages(exams){
+  const score = new Map(); // src -> somme des sens observés
+  for (const exam of exams.values()){
+    for (const entry of exam.values.values()){
+      if (!entry.img) continue;
+      score.set(entry.img, (score.get(entry.img) || 0) + abnormalDirection(entry.value, entry.ref));
+    }
+  }
+  const meaning = new Map(); // src -> '+' | '-'
+  for (const [src, s] of score) if (s !== 0) meaning.set(src, s > 0 ? '+' : '-');
+
+  // Un export a exactement deux images : si l'une est identifiée et pas l'autre
+  // (ex : aucune valeur basse à référence en ">"), la seconde est son contraire.
+  if (score.size === 2 && meaning.size === 1){
+    const [known] = meaning.keys();
+    const other = [...score.keys()].find(src => src !== known);
+    meaning.set(other, meaning.get(known) === '+' ? '-' : '+');
+  }
+
+  for (const exam of exams.values()){
+    for (const entry of exam.values.values()){
+      entry.flag = entry.img ? (meaning.get(entry.img) || null) : entry.flag;
+      delete entry.img;
+    }
+  }
+}
+
+/**
+ * Affecte à chaque ligne l'identifiant de son compte-rendu (celui du dernier
+ * en-tête rencontré), puis renvoie, par compte-rendu, l'ensemble des heures
+ * annoncées par des lignes « Heure de prélèvement ».
+ */
+function sampleTimesByReport(rows){
+  const times = new Map();
+  let report = '';
+  rows.forEach((r, i) => {
+    if (r.kind === 'stamp-date') report = r.labId || '#' + i; // sans identifiant : chaque en-tête est un compte-rendu
+    r.report = report;
+    if (isSampleTimeRow(r)){
+      if (!times.has(report)) times.set(report, new Set());
+      times.get(report).add(r.value);
+    }
+  });
+  return times;
+}
+
+function isSampleTimeRow(r){
+  return r.kind === 'result' && SAMPLE_TIME_LABEL_RE.test(r.label) && TIME_RE.test(r.value);
+}
+
+function buildStoreFromRows(rows){
+  const store = createStore();
+  const sampleTimes = sampleTimesByReport(rows);
+  let currentDate = null, currentTime = null;
+  let currentSection = '', currentSub = '';
+  let currentReport = null, timeLocked = false; // timeLocked : une heure de prélèvement propre a été posée
+
+  for (const r of rows){
+    switch (r.kind){
+      case 'stamp-date':
+        currentDate = r.value;
+        if (r.report !== currentReport){ currentReport = r.report; currentTime = null; timeLocked = false; }
+        break;
+      case 'stamp-time':
+        // L'en-tête est répété à chaque page : il ne doit pas écraser une
+        // heure de prélèvement déjà posée pour ce compte-rendu.
+        if (!timeLocked) currentTime = r.value;
+        break;
+      case 'title':
+        if (r.text === '-') break;
+        if (isAllCaps(r.text)){ currentSection = r.text; currentSub = ''; }
+        else { currentSub = r.text; }
+        break;
+      case 'result':
+        // Prélèvements multiples dans un même compte-rendu : cette ligne ouvre
+        // une nouvelle colonne horaire (même règle que pour le texte collé).
+        if (isSampleTimeRow(r) && sampleTimes.get(r.report).size > 1){ currentTime = r.value; timeLocked = true; }
+        if (isIgnoredLabel(r.label) || !r.value) break;
+        addResult(store, {
+          section: currentSection, sub: currentSub, label: r.label, unit: r.unit,
+          ref: r.ref, flag: null, img: r.img, value: r.value,
+          dateKey: makeDateKey(currentDate, currentTime),
+        });
+        break;
+      // 'footer', 'merged', 'other' : sans effet
+    }
+  }
+  inferFlagsFromImages(store.exams);
+  return finalizeStore(store);
+}
+
+/** Point d'entrée : texte HTML de l'export -> { exams, dateKeys, collisions }. */
+function parseOrbisHtmlExport(html){
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  return buildStoreFromRows(mergePageBreakFragments(extractHtmlRows(doc)));
+}
+
 
 /* ============================================================================
-   ÉTAT ET RENDU
+   6. COUCHE D'AFFICHAGE : des « examens bruts » aux « lignes affichées »
+   ----------------------------------------------------------------------------
+   Le magasin (sections 3 à 5) conserve les libellés EXACTEMENT comme le
+   laboratoire les écrit : rien n'y est perdu. Cette couche en dérive les
+   « lignes affichées » (items), utilisées par le tableau, la liste, le CSV et
+   le résumé :
+     6.1  nom d'analyte nettoyé (unité redondante, descripteur de tube APPRIS)
+     6.2  fusion des variantes d'un même analyte (autre tube, autre époque)
+     6.3  classement « technique » (masquable, jamais supprimé)
+   Tout est déduit des données de l'export : aucune liste à maintenir. Un
+   descripteur que l'on ne sait pas reconnaître reste simplement visible : le
+   pire cas est du bruit, jamais une fusion fausse.
+
+   Forme d'un item :
+     { label, rawLabels[], unit, section, sub, values: Map(dateKey -> entrée),
+       technical, index, groupTitle, groupOrder, rank }
+   Chaque entrée d'un item fusionné garde en plus `variant` (libellé d'origine).
    ============================================================================ */
 
-let PARSED = null; // { exams, dateKeys }
+/* ---- 6.1 Nom d'analyte ------------------------------------------------------ */
 
-function normalizeForMatch(s){
-  return s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+/** Forme comparable d'une unité, en tenant compte des équivalences physiques (Giga/l = x10*9/L). */
+function canonUnit(unit){
+  const n = normUnit(unit);
+  return UNIT_EQUIVALENTS[n] || n;
 }
 
-// Renvoie un statut explicite plutôt qu'un simple trouvé/pas trouvé, pour que
-// generateSummary() puisse distinguer "n'existe pas" d'"existe en double,
-// précise avec @ Rubrique" — jamais choisir silencieusement entre les deux.
+/** "Leucocytes (x10*9/L)" avec l'unité x10*9/L -> "Leucocytes" : la parenthèse répète l'unité. */
+function stripRedundantUnit(label, unit){
+  const m = label.match(/^(.*\S)\s*\(([^()]+)\)\s*$/);
+  return (m && unit && canonUnit(m[2]) === canonUnit(unit)) ? m[1] : label;
+}
+
+/**
+ * Apprend, à partir des libellés de l'export, les suffixes qui décrivent le
+ * tube ou le prélèvement (« Sang héparine lithium », « Plasma Héparine (b vert) »,
+ * « H_PPP »…) plutôt que l'analyte. Un suffixe est retenu si :
+ *   (a) il est porté par au moins DESCRIPTOR_MIN_ANALYTES analytes distincts ;
+ *   (b) il est SUBSTITUABLE : au moins DESCRIPTOR_MIN_SUBSTITUTABLE de ces
+ *       analytes existent aussi avec UN AUTRE descripteur fréquent (le même
+ *       analyte mesuré sur un autre tube).
+ * Le critère (b) écarte les fins de mots légitimes très fréquentes (« … globulines »
+ * dans « Alpha 1 globulines », « … patient » dans « Poids du patient »), que la
+ * seule fréquence ne distingue pas. Un analyte qui n'a jamais changé de tube
+ * est tout de même nettoyé, puisque son descripteur est appris sur les autres.
+ *
+ * Les libellés sont fournis avec leur rubrique : une variante n'en autorise une
+ * autre que si elles sont dans la même rubrique et sous-rubrique.
+ * Renvoie un Map(suffixe -> nombre d'analytes qui le portent).
+ */
+function learnDescriptors(entries){
+  const unique = [...new Map(entries.map(e => [e.group + '\u241F' + e.label, e])).values()];
+
+  // suffixe -> ensemble des « têtes » (libellé privé de ce suffixe, avec sa rubrique)
+  const headsOf = new Map();
+  for (const { label, group } of unique){
+    const words = label.split(/\s+/);
+    const maxN = Math.min(DESCRIPTOR_MAX_WORDS, words.length - 1);
+    for (let n = 1; n <= maxN; n++){
+      const suffix = words.slice(-n).join(' ');
+      if (!headsOf.has(suffix)) headsOf.set(suffix, new Map());
+      const head = words.slice(0, -n).join(' ');
+      headsOf.get(suffix).set(group + '\u241F' + head, head);
+    }
+  }
+
+  // (a) suffixes fréquents ; et pour chaque tête, les suffixes fréquents qu'elle porte
+  const frequent = [...headsOf].filter(([, heads]) => new Set(heads.values()).size >= DESCRIPTOR_MIN_ANALYTES);
+  const suffixesOfHead = new Map();
+  for (const [suffix, heads] of frequent){
+    for (const headKey of heads.keys()){
+      if (!suffixesOfHead.has(headKey)) suffixesOfHead.set(headKey, new Set());
+      suffixesOfHead.get(headKey).add(suffix);
+    }
+  }
+
+  // (b) substituabilité
+  const selected = new Map();
+  for (const [suffix, heads] of frequent){
+    let substitutable = 0;
+    for (const headKey of heads.keys()){
+      // « autre » descripteur : ni un morceau de ce suffixe, ni un suffixe qui le contient
+      const others = [...suffixesOfHead.get(headKey)].filter(x => x !== suffix && !x.endsWith(suffix) && !suffix.endsWith(x));
+      if (others.length) substitutable++;
+    }
+    if (substitutable >= DESCRIPTOR_MIN_SUBSTITUTABLE) selected.set(suffix, new Set(heads.values()).size);
+  }
+  return selected;
+}
+
+/**
+ * Retire le plus long descripteur appris en fin de libellé (jamais le libellé
+ * entier), sauf si ce descripteur n'est qu'un descripteur plus court précédé d'un
+ * mot d'analyte (voir DESCRIPTOR_EXTEND_RATIO).
+ */
+function stripDescriptor(label, descriptors){
+  const words = label.split(/\s+/);
+  for (let n = Math.min(DESCRIPTOR_MAX_WORDS, words.length - 1); n >= 1; n--){
+    const suffix = words.slice(-n).join(' ');
+    const count = descriptors.get(suffix);
+    if (count === undefined) continue;
+
+    const shorter = n > 1 ? descriptors.get(words.slice(-(n - 1)).join(' ')) : undefined;
+    if (shorter !== undefined && count < DESCRIPTOR_EXTEND_RATIO * shorter) continue; // « patient » n'est pas un tube
+
+    return { head: words.slice(0, -n).join(' '), descriptor: suffix };
+  }
+  return { head: label, descriptor: '' };
+}
+
+/* ---- 6.2 Construction et fusion des items ----------------------------------- */
+
+/**
+ * Transforme les examens bruts en lignes affichées.
+ * @param exams  Map issue du parseur (clé = rubrique, sous-rubrique, libellé, unité)
+ * @param merge  true : nom nettoyé + fusion des variantes ; false : libellés bruts
+ *
+ * Deux examens bruts ne sont fusionnés que s'ils ont même rubrique, même
+ * sous-rubrique, même nom nettoyé, même unité (équivalences comprises) ET
+ * aucune date en commun : deux variantes mesurées le même jour restent
+ * distinctes, on ne choisit jamais silencieusement entre deux valeurs.
+ */
+function buildItems(exams, merge){
+  const list = [...exams.values()];
+
+  // Noms nettoyés. L'apprentissage des descripteurs porte sur les noms déjà
+  // privés de leur parenthèse d'unité, pour que les deux nettoyages s'additionnent.
+  const bases = list.map(e => merge ? stripRedundantUnit(e.label, e.unit) : e.label);
+  const descriptors = merge
+    ? learnDescriptors(list.map((e, i) => ({ label: bases[i], group: e.section + '\u241F' + e.sub })))
+    : new Map();
+
+  const items = [];
+  const buckets = new Map(); // clé de fusion -> items déjà créés pour cette clé
+
+  list.forEach((exam, i) => {
+    let name = merge ? stripDescriptor(bases[i], descriptors).head : bases[i];
+
+    // Libellé sans aucune lettre ("-", ".", "_") : il ne dit rien, la
+    // sous-rubrique (ou à défaut la rubrique) le remplace.
+    if (!/[A-Za-zÀ-ÿ]/.test(name)) name = exam.sub || exam.section || exam.label;
+
+    const mergeKey = [exam.section, exam.sub, normalizeForMatch(name), canonUnit(exam.unit)].join('\u241F');
+
+    // Cherche un item de même clé dont aucune date n'est déjà occupée par cet examen.
+    let target = null;
+    if (merge){
+      const dates = [...exam.values.keys()];
+      target = (buckets.get(mergeKey) || []).find(it => !dates.some(d => it.values.has(d))) || null;
+    }
+    if (!target){
+      target = {
+        label: name, rawLabels: [], unit: exam.unit, section: exam.section, sub: exam.sub,
+        values: new Map(), technical: false, index: items.length,
+        groupTitle: '', groupOrder: 0, rank: 0,   // renseignés par applyLayoutToItems()
+      };
+      items.push(target);
+      if (merge){
+        if (!buckets.has(mergeKey)) buckets.set(mergeKey, []);
+        buckets.get(mergeKey).push(target);
+      }
+    }
+    target.rawLabels.push(exam.label);
+    for (const [dateKey, entry] of exam.values) target.values.set(dateKey, { ...entry, variant: exam.label });
+  });
+
+  for (const item of items) item.technical = isTechnicalItem(item);
+  return items;
+}
+
+/* ---- 6.3 Lignes « techniques » ------------------------------------------------ */
+
+/**
+ * Valeur sans contenu clinique : rien, « . » ou « _ » seuls, « PDF », « Non renseigné »,
+ * ou le libellé répété comme valeur (examen sous-traité dont seul le nom revient),
+ * éventuellement suivi de la mention « Laboratoire destinataire … » (export HTML).
+ */
+function isNoiseValue(value, item){
+  const v = normalizeForMatch(value);
+  // Vide, ou seulement "." / "_" (libellés-espaces de l'export). ATTENTION : "+" et "-"
+  // sont de vrais résultats (« Anisocytose : + ») et ne doivent jamais être masqués.
+  if (/^[._\s]*$/.test(v)) return true;
+  if (v === 'pdf' || v === 'non renseigne') return true;
+  return [item.label, ...item.rawLabels].some(l => {
+    const n = normalizeForMatch(l);
+    // L'export HTML colle parfois la mention au libellé SANS espace (« Cuivre» + «Laboratoire destinataire … »,
+    // un seul <span> à la source) : on tolère donc l'absence de séparateur.
+    return v === n || (v.startsWith(n) && /^\s*laboratoire destinataire/.test(v.slice(n.length)));
+  });
+}
+
+/**
+ * Un item est technique si toutes ses valeurs sont du bruit, ou s'il appartient
+ * à un compte-rendu PDF. Déterminé par la STRUCTURE (rubrique « COMPTE-RENDU … »,
+ * sous-rubrique « CR - … », contenu des valeurs), pas par une liste de noms.
+ * C'est un simple marqueur : la case « Masquer les lignes techniques » le lit à l'affichage.
+ */
+function isTechnicalItem(item){
+  if (/^COMPTE-RENDU\b/i.test(item.section) || /^CR\s*-/i.test(item.sub)) return true;
+  return [...item.values.values()].every(e => isNoiseValue(e.value, item));
+}
+
+/**
+ * Libellés présents plusieurs fois dans la même rubrique (unités différentes,
+ * ex. neutrophiles en % et en x10*9/L) : on affiche alors l'unité pour les distinguer.
+ */
+function computeMultiUnitKeys(items){
+  const counts = new Map();
+  for (const it of items){
+    const k = [it.section, it.sub, normalizeForMatch(it.label)].join('\u241F');
+    counts.set(k, (counts.get(k) || 0) + 1);
+  }
+  return new Set([...counts].filter(([, n]) => n > 1).map(([k]) => k));
+}
+
+function displayLabel(item){
+  const k = [item.section, item.sub, normalizeForMatch(item.label)].join('\u241F');
+  return PARSED.multiUnit.has(k) ? `${item.label} (${item.unit || 'sans unité'})` : item.label;
+}
+
+function describeGroup(d){
+  return d.section + (d.sub ? ' — ' + d.sub : '') + (d.unit ? ' [' + d.unit + ']' : '');
+}
+
+
+/* ============================================================================
+   7. ORDRE PERSONNALISÉ
+   ----------------------------------------------------------------------------
+   Les rubriques du laboratoire ne suivent pas les blocs cliniques (sodium,
+   ASAT et LDH sont tous dans « Examens sanguins ») : l'ordre se définit donc
+   PAR EXAMEN, dans un petit texte éditable, une ligne par bloc :
+
+       Titre du bloc : terme, terme, …
+
+   Un terme est :
+       sodium                un morceau du nom de l'examen (accents/casse ignorés)
+       = Protéines           le nom exact
+       sodium @ sanguins     restreint à une rubrique/sous-rubrique OU à une unité
+       rubrique=HEMATOLOGIE  toute une rubrique du laboratoire
+       *                     tout ce qui reste
+   Les blocs s'affichent dans l'ordre des lignes ; à l'intérieur d'un bloc, les
+   examens suivent l'ordre des termes. Le premier bloc qui reconnaît un examen
+   le garde. Ce qui n'est reconnu par aucun bloc va à la fin, dans « Autres ».
+   Les règles portent sur le nom nettoyé ET sur les libellés d'origine : elles
+   marchent donc quel que soit le tube.
+   ============================================================================ */
+
+const LAYOUT_STORAGE_KEY = 'bio_layout_v1';
+let LAYOUT = []; // [{ title, terms[] }] ; vide = ordre du laboratoire
+
+const EXAMPLE_LAYOUT =
+`# Une ligne par bloc :  Titre : terme, terme, …
+# rubrique=… = une rubrique du laboratoire ; "nom @ précision" restreint ; "*" = tout le reste.
+Hématologie : rubrique=HEMATOLOGIE - CYTOLOGIE
+Hémostase : rubrique=HEMOSTASE, quick, prothrombine, fibrinogène, D-dimères
+Ionogramme : sodium @ sanguins, potassium @ sanguins, chlorure, bicarbonate @ sanguins, protéines @ sanguins, calcium @ sanguins, phosphates @ sanguins
+Fonction rénale : urée @ sanguins, créatinine @ sanguins, DFG
+Bilan hépatique : ASAT, ALAT, gamma GT, phosphatases alcalines, bilirubine, LDH
+Inflammation : CRP, orosomucoïde, haptoglobine`;
+
+/** Un terme du texte d'ordre -> objet de comparaison (voir la syntaxe ci-dessus). */
+function parseLayoutTerm(raw){
+  const t = raw.trim();
+  if (!t) return null;
+  if (t === '*') return { kind: 'any' };
+
+  let m = t.match(/^rubrique\s*=\s*(.+)$/i);
+  if (m) return { kind: 'group', q: normalizeForMatch(m[1]) };
+
+  m = t.match(/^=\s*(.+?)(?:\s*@\s*(.+))?$/);                       // nom exact [@ précision]
+  if (m) return { kind: 'name', exact: true, q: normalizeForMatch(m[1]), qual: m[2] ? m[2].trim() : null };
+
+  m = t.match(/^(.+?)\s*@\s*(.+)$/);                                // nom @ précision
+  if (m) return { kind: 'name', exact: false, q: normalizeForMatch(m[1]), qual: m[2].trim() };
+
+  return { kind: 'name', exact: false, q: normalizeForMatch(t), qual: null };
+}
+
+/** Texte d'ordre -> { groups: [{title, terms}], ignored: [lignes non comprises] }. */
+function parseLayout(text){
+  const groups = [], ignored = [];
+  for (const rawLine of text.split(/\r?\n/)){
+    const line = rawLine.replace(/#.*$/, '').trim();   // « # » commence un commentaire
+    if (!line) continue;
+    const colon = line.indexOf(':');
+    const title = colon > 0 ? line.slice(0, colon).trim() : '';
+    const terms = colon > 0 ? line.slice(colon + 1).split(',').map(parseLayoutTerm).filter(Boolean) : [];
+    if (title && terms.length) groups.push({ title, terms });
+    else ignored.push(line);
+  }
+  return { groups, ignored };
+}
+
+/** Un item correspond-il à ce terme ? */
+function termMatches(term, item){
+  if (term.kind === 'any') return true;
+  const groupText = normalizeForMatch(item.section + ' ' + item.sub);
+  if (term.kind === 'group') return groupText.includes(term.q);
+
+  const names = [item.label, ...item.rawLabels].map(normalizeForMatch);
+  const hit = term.exact ? names.some(n => n === term.q) : names.some(n => n.includes(term.q));
+  if (!hit) return false;
+  if (!term.qual) return true;
+  return normUnit(item.unit) === normUnit(term.qual) || groupText.includes(normalizeForMatch(term.qual));
+}
+
+/**
+ * Affecte à chaque item son bloc d'affichage (groupTitle), l'ordre du bloc
+ * (groupOrder) et son rang dans le bloc (rank). Sans ordre personnalisé, les
+ * blocs sont les rubriques du laboratoire, dans l'ordre de première apparition.
+ * Tableau, liste et CSV passent tous par visibleItems(), qui trie sur ces trois champs.
+ */
+function applyLayoutToItems(){
+  if (!PARSED) return;
+  const firstSeen = new Map();
+  for (const it of PARSED.items){
+    if (LAYOUT.length){
+      let placed = false;
+      for (let g = 0; g < LAYOUT.length && !placed; g++){
+        const t = LAYOUT[g].terms.findIndex(term => termMatches(term, it));
+        if (t >= 0){
+          it.groupTitle = LAYOUT[g].title; it.groupOrder = g;
+          it.rank = t * 1e6 + it.index;           // d'abord l'ordre des termes, puis l'ordre du laboratoire
+          placed = true;
+        }
+      }
+      if (!placed){ it.groupTitle = 'Autres'; it.groupOrder = LAYOUT.length; it.rank = it.index; }
+    } else {
+      it.groupTitle = (it.section + (it.sub ? ' — ' + it.sub : '')) || '(non classé)';
+      if (!firstSeen.has(it.groupTitle)) firstSeen.set(it.groupTitle, firstSeen.size);
+      it.groupOrder = firstSeen.get(it.groupTitle);
+      it.rank = it.index;
+    }
+  }
+}
+
+/** Applique (et mémorise localement) un texte d'ordre. */
+function applyLayoutText(text){
+  const { groups, ignored } = parseLayout(text);
+  LAYOUT = groups;
+  try { localStorage.setItem(LAYOUT_STORAGE_KEY, text); } catch (e) { /* stockage indisponible : sans conséquence */ }
+  if (PARSED){ applyLayoutToItems(); renderAll(); }
+  showLayoutStatus(ignored);
+}
+
+function showLayoutStatus(ignored){
+  const msgs = [];
+  if (ignored.length) msgs.push(`${ignored.length} ligne(s) ignorée(s) (format attendu « Titre : terme, … ») : ${ignored.map(l => '« ' + l.slice(0, 40) + ' »').join(' ; ')}`);
+  if (PARSED && LAYOUT.length){
+    const others = PARSED.items.filter(it => it.groupOrder === LAYOUT.length && !it.technical).length;
+    if (others) msgs.push(`${others} examen(s) non classé(s), regroupés dans « Autres ».`);
+  }
+  document.getElementById('layout-warn').textContent = msgs.join(' ');
+}
+
+
+/* ============================================================================
+   8. ÉTAT ET RENDU (tableau, liste d'insertion)
+   ============================================================================ */
+
+let PARSED = null; // { exams (bruts), dateKeys, collisions, items (affichés), multiUnit }
+
+/** Recalcule les lignes affichées (après un changement de données ou de l'option de fusion). */
+function rebuildItems(){
+  PARSED.items = buildItems(PARSED.exams, document.getElementById('chk-merge').checked);
+  PARSED.multiUnit = computeMultiUnitKeys(PARSED.items);
+  applyLayoutToItems();
+}
+
+/** Redessine toutes les vues qui dépendent des lignes affichées. */
+function renderAll(){
+  updateStats();
+  buildTable();
+  buildInsertList();
+  buildCompactList();
+}
+
+function updateStats(){
+  const hidden = PARSED.items.filter(it => it.technical).length;
+  let pending = 0;
+  for (const it of PARSED.items)
+    for (const entry of it.values.values())
+      if (/^en (cours|attente)/i.test(entry.value)) pending++;
+
+  document.getElementById('stats').textContent =
+    `${PARSED.items.length} examens distincts` +
+    (PARSED.items.length !== PARSED.exams.size ? ` (${PARSED.exams.size} libellés bruts avant fusion)` : '') +
+    `, ${PARSED.dateKeys.length} prélèvements datés.` +
+    (hidden ? ` ${hidden} ligne(s) technique(s) repérée(s).` : '') +
+    (pending ? ` ${pending} résultat(s) « en cours / en attente ».` : '') +
+    (PARSED.collisions ? ` ⚠️ ${PARSED.collisions} case(s) avec deux valeurs différentes (seule la dernière est conservée).` : '');
+}
+
+/** Désigne un examen par son nom (ou l'un de ses libellés d'origine), éventuellement qualifié. */
+function itemHasName(item, normalizedTarget){
+  return [item.label, ...item.rawLabels].some(l => normalizeForMatch(l) === normalizedTarget);
+}
+
+/**
+ * Renvoie un statut explicite plutôt qu'un simple trouvé/pas trouvé, pour que
+ * generateSummary() distingue "n'existe pas" d'"existe en double, précise avec @".
+ * Le qualificatif peut désigner une rubrique/sous-rubrique OU une unité.
+ */
 function findExamByName(name, qualifier){
   if (!PARSED) return { status: 'not-found' };
   const target = normalizeForMatch(name);
-  let candidates = [...PARSED.exams.values()].filter(data => normalizeForMatch(data.label) === target);
+  let candidates = PARSED.items.filter(it => itemHasName(it, target));
 
   if (!candidates.length){
-    // Repli par alias : le nom demandé et/ou le libellé réel du compte-rendu
-    // peuvent être des variantes l'un de l'autre (LABEL_ALIASES). On élargit
-    // la recherche uniquement ici, à la lecture — les examens eux-mêmes
-    // restent distincts dans PARSED.exams (étape 0).
+    // Repli par alias : élargi uniquement ici, à la lecture (LABEL_ALIASES).
     const canonTarget = normalizeForMatch(resolveCanonical(name));
-    candidates = [...PARSED.exams.values()].filter(data => normalizeForMatch(resolveCanonical(data.label)) === canonTarget);
+    candidates = PARSED.items.filter(it =>
+      [it.label, ...it.rawLabels].some(l => normalizeForMatch(resolveCanonical(l)) === canonTarget));
   }
-
   if (!candidates.length) return { status: 'not-found' };
 
   let pool = candidates;
   if (qualifier){
     const q = normalizeForMatch(qualifier);
-    pool = candidates.filter(data => normalizeForMatch(data.section + ' ' + data.sub).includes(q));
+    pool = candidates.filter(it =>
+      normUnit(it.unit) === normUnit(qualifier) ||
+      normalizeForMatch(it.section + ' ' + it.sub).includes(q));
     if (!pool.length) return { status: 'qualifier-no-match', candidates };
   }
   if (pool.length === 1) return { status: 'ok', data: pool[0] };
   return { status: 'ambiguous', candidates: pool };
+}
+
+// Si `text` est une variante connue (ou le nom canonique lui-même) d'une
+// entrée de LABEL_ALIASES, renvoie ce nom canonique ; sinon `text` tel quel.
+function resolveCanonical(text){
+  const target = normalizeForMatch(text);
+  for (const canon in LABEL_ALIASES){
+    if (normalizeForMatch(canon) === target) return canon;
+    if (LABEL_ALIASES[canon].some(v => normalizeForMatch(v) === target)) return canon;
+  }
+  return text;
 }
 
 function orderedDateKeys(){
@@ -544,51 +1326,49 @@ function orderedDateKeys(){
   return document.getElementById('chk-order').checked ? asc : [...asc].reverse();
 }
 
-function visibleExams(queryOverride){
+/**
+ * Lignes à afficher, dans l'ordre d'affichage (bloc, puis rang dans le bloc).
+ * Point de passage unique du tableau, de la liste et du CSV : c'est ici que
+ * s'appliquent le filtre de recherche et le masquage des lignes techniques.
+ */
+function visibleItems(queryOverride){
   const q = normalizeForMatch(queryOverride !== undefined ? queryOverride : (document.getElementById('search').value || ''));
-  const out = [];
-  for (const data of PARSED.exams.values()){
-    if (q && !normalizeForMatch(data.label).includes(q) && !normalizeForMatch(data.section+' '+data.sub).includes(q)) continue;
-    out.push(data);
-  }
-  // Regroupement par section/sous-section, dans l'ordre de première apparition.
-  const order = [];
-  const seen = new Set();
-  for (const data of out){
-    const key = data.section + '||' + data.sub;
-    if (!seen.has(key)){ seen.add(key); order.push(key); }
-  }
-  out.sort((a,b) => order.indexOf(a.section+'||'+a.sub) - order.indexOf(b.section+'||'+b.sub));
-  return out;
+  const hideTechnical = document.getElementById('chk-technical').checked;
+  return PARSED.items
+    .filter(it => {
+      if (hideTechnical && it.technical) return false;
+      if (!q) return true;
+      return [it.label, ...it.rawLabels, it.section + ' ' + it.sub, it.groupTitle].some(s => normalizeForMatch(s).includes(q));
+    })
+    .sort((a, b) => a.groupOrder - b.groupOrder || a.rank - b.rank);
 }
 
 function buildTable(){
   const table = document.getElementById('data-table');
   const dates = orderedDateKeys();
-  const exams = visibleExams();
+  const items = visibleItems();
 
   let html = '<thead><tr><th class="label">Examen</th>';
-  for (const d of dates) html += `<th>${d}</th>`;
+  for (const d of dates) html += `<th>${escapeHtml(d)}</th>`;
   html += '</tr></thead><tbody>';
 
   let lastGroup = null;
-  for (const data of exams){
-    const group = data.section + (data.sub ? ' — ' + data.sub : '');
-if (group !== lastGroup){
-  html += `<tr class="section-row"><td class="label">${group || '(non classé)'}</td>`;
-  for (let i = 0; i < dates.length; i++) {
-    html += '<td></td>';
-  }
-  html += '</tr>';
-  lastGroup = group;
-}
-    html += `<tr><td class="label">${data.label}</td>`;
+  for (const item of items){
+    if (item.groupTitle !== lastGroup){
+      html += `<tr class="section-row"><td class="label">${escapeHtml(item.groupTitle)}</td>`;
+      for (let i = 0; i < dates.length; i++) html += '<td></td>';
+      html += '</tr>';
+      lastGroup = item.groupTitle;
+    }
+    const merged = item.rawLabels.length > 1;
+    const labelTitle = merged ? ` title="${escapeHtml("Libellés d'origine : " + item.rawLabels.join(' | '))}"` : '';
+    html += `<tr><td class="label"${labelTitle}>${escapeHtml(displayLabel(item))}</td>`;
     for (const d of dates){
-      const entry = data.values.get(d);
+      const entry = item.values.get(d);
       if (!entry){ html += '<td></td>'; continue; }
       const cls = entry.flag === '+' ? 'flag-high' : (entry.flag === '-' ? 'flag-low' : '');
-      const title = entry.ref ? `Réf. : ${entry.ref}` : '';
-      html += `<td class="val ${cls}" title="${title}">${entry.value}${entry.unit ? ' '+entry.unit : ''}</td>`;
+      const title = [entry.ref ? `Réf. : ${entry.ref}` : '', merged ? entry.variant : ''].filter(Boolean).join(' — ');
+      html += `<td class="val ${cls}" title="${escapeHtml(title)}">${escapeHtml(entry.value)}${entry.unit ? ' ' + escapeHtml(entry.unit) : ''}</td>`;
     }
     html += '</tr>';
   }
@@ -596,25 +1376,38 @@ if (group !== lastGroup){
   table.innerHTML = html;
 }
 
+/**
+ * Placeholder le plus court qui identifie l'examen sans ambiguïté :
+ *   - nom seul s'il est unique ;
+ *   - "@ rubrique" s'il existe dans d'autres rubriques ;
+ *   - "@ unité" s'il existe dans la même rubrique sous d'autres unités.
+ */
+function placeholderFor(item, allItems){
+  const siblings = allItems.filter(e => normalizeForMatch(e.label) === normalizeForMatch(item.label));
+  if (siblings.length === 1) return item.label;
+
+  const groupOf = e => e.section + '\u241F' + e.sub;
+  const group = item.sub || item.section;
+  if (siblings.filter(e => groupOf(e) === groupOf(item)).length === 1) return `${item.label} @ ${group}`;
+
+  if (item.unit && siblings.filter(e => normUnit(e.unit) === normUnit(item.unit)).length === 1) return `${item.label} @ ${item.unit}`;
+  return `${item.label} @ ${group}`; // reste ambigu : le résumé le signalera
+}
+
 function buildInsertList(){
   const list = document.getElementById('insert-list');
   const q = normalizeForMatch(document.getElementById('search-insert').value || '');
-
-  // Un libellé est ambigu s'il existe sous plusieurs couples (rubrique,
-  // sous-rubrique) parmi les examens actuellement extraits.
-  const labelCounts = {};
-  for (const data of PARSED.exams.values()){
-    const k = normalizeForMatch(data.label);
-    labelCounts[k] = (labelCounts[k] || 0) + 1;
-  }
+  const all = PARSED.items;
 
   let html = '';
-  for (const data of PARSED.exams.values()){
-    if (q && !normalizeForMatch(data.label).includes(q)) continue;
-    const ambiguous = labelCounts[normalizeForMatch(data.label)] > 1;
-    const placeholder = ambiguous ? `${data.label} @ ${data.sub || data.section}` : data.label;
-    const title = ambiguous ? ' title="Existe aussi sous une autre rubrique — placeholder qualifié automatiquement"' : '';
-    html += `<button type="button" data-placeholder="${placeholder.replace(/"/g,'&quot;')}"${title}><span class="cat">${data.section}${data.sub ? ' — '+data.sub : ''}</span>${data.label}${ambiguous ? ' ⚠️' : ''}</button>`;
+  for (const item of all){
+    if (q && ![item.label, ...item.rawLabels].some(l => normalizeForMatch(l).includes(q))) continue;
+    const placeholder = placeholderFor(item, all);
+    const ambiguous = placeholder !== item.label;
+    const note = ambiguous ? 'Existe aussi sous une autre rubrique ou une autre unité — placeholder qualifié automatiquement. ' : '';
+    const origin = item.rawLabels.length > 1 ? "Libellés d'origine : " + item.rawLabels.join(' | ') : '';
+    const title = (note || origin) ? ` title="${escapeHtml(note + origin)}"` : '';
+    html += `<button type="button" data-placeholder="${escapeHtml(placeholder)}"${title}><span class="cat">${escapeHtml(item.section + (item.sub ? ' — ' + item.sub : ''))}</span>${escapeHtml(displayLabel(item))}${ambiguous ? ' ⚠️' : ''}</button>`;
   }
   list.innerHTML = html;
   list.querySelectorAll('button').forEach(btn => {
@@ -622,13 +1415,15 @@ function buildInsertList(){
   });
 }
 
-function buildRefDateSelect(selectId){
+/** Remplit un menu de dates (plus récente en premier ; `oldest` présélectionne la plus ancienne). */
+function buildRefDateSelect(selectId, oldest = false){
   const sel = document.getElementById(selectId);
   if (!sel) return;
   const prev = sel.value;
   const dates = [...PARSED.dateKeys].reverse(); // plus récent en premier
-  sel.innerHTML = dates.map(d => `<option value="${d}">${d}</option>`).join('');
-  if (dates.includes(prev)) sel.value = prev; // conserve le choix si on réanalyse un texte proche
+  sel.innerHTML = dates.map(d => `<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('');
+  if (dates.includes(prev)) sel.value = prev;           // conserve le choix si on réanalyse un texte proche
+  else if (oldest && dates.length) sel.selectedIndex = dates.length - 1;
 }
 
 function insertAtCursor(textarea, text){
@@ -638,49 +1433,50 @@ function insertAtCursor(textarea, text){
   textarea.selectionStart = textarea.selectionEnd = start + text.length;
 }
 
+
 /* ============================================================================
-   GÉNÉRATION DU RÉSUMÉ
+   9. GÉNÉRATION DU RÉSUMÉ
    ============================================================================ */
 
-function toSortableDate(key){
-  const m = key.match(/^(\d{2})\/(\d{2})\/(\d{2})(?:\s+(\d{2}):(\d{2}))?/);
-  if (!m) return 0;
-  const [, dd, mm, yy, hh, mi] = m;
-  return new Date(2000 + (+yy), (+mm) - 1, +dd, +(hh||0), +(mi||0)).getTime();
-}
-
-// Pour un examen donné, renvoie l'entrée à la date de référence choisie, ou à
-// défaut la valeur disponible la plus proche antérieure à cette date.
-function valueAtOrBefore(data, refDateKey){
+/**
+ * Valeur d'un item à la date de référence, ou à défaut la plus proche
+ * antérieure. `maxAgeDays` (facultatif) écarte les valeurs trop anciennes
+ * par rapport à la date de référence : null = pas de limite.
+ */
+function pickAtOrBefore(item, refDateKey, maxAgeDays = null){
   const refTime = toSortableDate(refDateKey);
   let best = null, bestTime = -Infinity;
-  for (const [dk, entry] of data.values){
+  for (const [dk, entry] of item.values){
     const t = toSortableDate(dk);
-    if (t <= refTime && t > bestTime){ best = { ...entry, date: dk }; bestTime = t; }
+    if (t > refTime || t <= bestTime) continue;
+    if (maxAgeDays !== null && refTime - t > maxAgeDays * DAY_MS) continue;
+    best = { ...entry, date: dk };
+    bestTime = t;
   }
   return best;
 }
+function valueAtOrBefore(item, refDateKey){ return pickAtOrBefore(item, refDateKey, null); }
 
 function generateSummary(){
   const template = document.getElementById('template-area').value;
   const refDate = document.getElementById('ref-date').value;
   const missing = [];
 
-  // Accepte désormais {{Label}}, {{Label|valeur}}, {{Label @ Rubrique}} et
-  // {{Label @ Rubrique|valeur}} — le qualificatif @ est toujours optionnel.
+  // Accepte {{Label}}, {{Label|valeur}}, {{Label @ Rubrique}}, {{Label @ unité}}
+  // et {{Label @ Rubrique|valeur}} — le qualificatif @ est toujours optionnel.
   const result = template.replace(/\{\{\s*([^}|@]+?)\s*(?:@\s*([^}|]+?)\s*)?(?:\|\s*(valeur|date)\s*)?\}\}/g, (whole, name, qualifier, mode) => {
     const found = findExamByName(name, qualifier);
 
     if (found.status === 'not-found'){ missing.push(name); return whole; }
 
     if (found.status === 'qualifier-no-match'){
-      const options = [...new Set(found.candidates.map(d => d.section + (d.sub ? ' — ' + d.sub : '')))];
-      missing.push(`${name} @ ${qualifier} (aucune rubrique ne correspond parmi : ${options.join(' | ')})`);
+      const options = [...new Set(found.candidates.map(describeGroup))];
+      missing.push(`${name} @ ${qualifier} (aucune correspondance parmi : ${options.join(' | ')})`);
       return whole;
     }
 
     if (found.status === 'ambiguous'){
-      const options = [...new Set(found.candidates.map(d => d.section + (d.sub ? ' — ' + d.sub : '')))];
+      const options = [...new Set(found.candidates.map(describeGroup))];
       missing.push(`${name} (ambigu — précise avec {{${name} @ ...}} parmi : ${options.join(' | ')})`);
       return whole;
     }
@@ -697,42 +1493,186 @@ function generateSummary(){
   warn.textContent = missing.length ? 'À vérifier : ' + missing.join(' ; ') : '';
 }
 
+
 /* ============================================================================
-   LISTE COMPACTE — une ligne par examen (valeur + norme), à une date donnée.
+   10. LISTE COMPACTE — une ligne par examen, une ou deux dates
+   ----------------------------------------------------------------------------
+   Deux modes :
+     « Une date »          valeur à la date choisie, ou la plus proche antérieure
+                           (avec, au besoin, un âge maximal) ;
+     « Comparer deux dates » intervalle [entrée ; sortie] : PREMIÈRE valeur de
+                           l'intervalle (entrée) et DERNIÈRE (sortie). Une valeur
+                           antérieure à l'entrée n'est donc jamais prise pour
+                           la valeur d'entrée.
+   Dates de prélèvement : par bloc, la date majoritaire est portée dans le
+   titre ; une valeur prélevée à un autre moment reçoit sa propre date.
    ============================================================================ */
+
+/** Date (jj/mm/aa) d'une clé "jj/mm/aa hh:mm". */
+function dayOf(dateKey){ return dateKey.slice(0, 8); }
+
+/**
+ * Regroupe les valeurs d'un bloc par « prélèvement » : deux valeurs font partie
+ * du même prélèvement si leurs heures sont distantes de moins de
+ * SAME_DRAW_WINDOW_MIN minutes (des tubes du même matin sont à 15:15 et 15:16).
+ *
+ * Renvoie { header, tags } :
+ *   header : date du prélèvement majoritaire (pour le titre du bloc) ;
+ *   tags   : Map(entrée -> date) pour les entrées d'un AUTRE prélèvement.
+ * L'heure n'est ajoutée que si le bloc contient plusieurs prélèvements le même jour.
+ */
+function planDates(entries){
+  if (!entries.length) return { header: null, tags: new Map() };
+
+  const sorted = [...entries].sort((x, y) => toSortableDate(x.date) - toSortableDate(y.date));
+  const clusters = [];
+  for (const e of sorted){
+    const t = toSortableDate(e.date);
+    const last = clusters[clusters.length - 1];
+    if (last && t - last.start <= SAME_DRAW_WINDOW_MIN * 60000) last.entries.push(e);
+    else clusters.push({ entries: [e], start: t });
+  }
+
+  // Prélèvement majoritaire ; à égalité, le plus récent.
+  const modal = clusters.reduce((best, c) =>
+    !best || c.entries.length > best.entries.length || (c.entries.length === best.entries.length && c.start > best.start) ? c : best, null);
+
+  // Plusieurs prélèvements le même jour -> l'heure devient nécessaire pour les distinguer.
+  const perDay = new Map();
+  for (const c of clusters) perDay.set(dayOf(c.entries[0].date), (perDay.get(dayOf(c.entries[0].date)) || 0) + 1);
+  const describe = c => perDay.get(dayOf(c.entries[0].date)) > 1 ? c.entries[0].date : dayOf(c.entries[0].date);
+
+  const tags = new Map();
+  for (const c of clusters){
+    if (c === modal) continue;
+    for (const e of c.entries) tags.set(e, describe(c));
+  }
+  return { header: describe(modal), tags };
+}
+
+/** « une date » : lit les réglages de l'onglet Liste. */
+function readListOptions(){
+  const age = parseFloat(document.getElementById('list-max-age').value);
+  return {
+    mode: document.getElementById('list-mode').value,
+    refDate: document.getElementById('ref-date-list').value,
+    from: document.getElementById('date-from-list').value,
+    to: document.getElementById('date-to-list').value,
+    norms: document.getElementById('chk-list-norms').checked,
+    dates: document.getElementById('chk-list-dates').checked,
+    maxAge: Number.isFinite(age) && age >= 0 ? age : null,
+    changedOnly: document.getElementById('chk-list-changed').checked,
+    delta: document.getElementById('chk-list-delta').checked,
+  };
+}
+
+/**
+ * Première et dernière valeur d'un item dans l'intervalle [from ; to]
+ * (bornes inversées = permutées). `single` : une seule valeur dans l'intervalle.
+ */
+function pickInterval(item, fromKey, toKey){
+  let lo = toSortableDate(fromKey), hi = toSortableDate(toKey);
+  if (lo > hi) [lo, hi] = [hi, lo];
+  let first = null, last = null, firstT = Infinity, lastT = -Infinity;
+  for (const [dk, entry] of item.values){
+    const t = toSortableDate(dk);
+    if (t < lo || t > hi) continue;
+    if (t < firstT){ first = { ...entry, date: dk }; firstT = t; }
+    if (t > lastT){ last = { ...entry, date: dk }; lastT = t; }
+  }
+  return first ? { a: first, b: last, single: first.date === last.date } : null;
+}
+
+function decimalsOf(s){ return (String(s).trim().split(/[.,]/)[1] || '').length; }
+
+/** " (Δ +1.8)" si les deux valeurs sont numériques, sinon "". */
+function deltaText(valueA, valueB){
+  const a = parseNumber(valueA), b = parseNumber(valueB);
+  if (a === null || b === null) return '';
+  const d = b - a;
+  return ` (Δ ${d > 0 ? '+' : ''}${d.toFixed(Math.max(decimalsOf(valueA), decimalsOf(valueB)))})`;
+}
 
 function buildCompactList(){
   if (!PARSED) return;
-  const refDate = document.getElementById('ref-date-list').value;
-  const showNorms = document.getElementById('chk-list-norms').checked;
-  const q = document.getElementById('search-list').value || '';
-  const exams = visibleExams(q);
+  const o = readListOptions();
+  const compare = o.mode === 'compare';
+  const items = visibleItems(document.getElementById('search-list').value || '');
 
-  const lines = [];
-  let lastGroup = null;
-  for (const data of exams){
-    const entry = valueAtOrBefore(data, refDate);
-    if (!entry) continue; // pas de valeur connue à cette date ou avant
-
-    const group = data.section + (data.sub ? ' — ' + data.sub : '');
-    if (group !== lastGroup){
-      if (lines.length) lines.push(''); // ligne vide entre rubriques
-      lines.push(group || '(non classé)');
-      lastGroup = group;
+  // 1. Valeurs retenues, regroupées par bloc (visibleItems les livre déjà triés par bloc).
+  const blocks = []; // { title, rows: [{ item, a, b, single }] }
+  for (const item of items){
+    let row;
+    if (compare){
+      const p = pickInterval(item, o.from, o.to);
+      if (!p) continue;
+      if (o.changedOnly && (p.single || p.a.value === p.b.value)) continue;
+      row = { item, ...p };
+    } else {
+      const a = pickAtOrBefore(item, o.refDate, o.maxAge);
+      if (!a) continue; // pas de valeur connue à cette date (ou trop ancienne)
+      row = { item, a, b: null, single: true };
     }
-
-    const arrow = entry.flag === '+' ? ' ↑' : (entry.flag === '-' ? ' ↓' : '');
-    let line = `- ${data.label} : ${entry.value}${entry.unit ? ' ' + entry.unit : ''}${arrow}`;
-    if (showNorms && entry.ref) line += ` (N : ${entry.ref})`;
-    lines.push(line);
+    let block = blocks[blocks.length - 1];
+    if (!block || block.title !== item.groupTitle){
+      block = { title: item.groupTitle, rows: [] };
+      blocks.push(block);
+    }
+    block.rows.push(row);
   }
 
+  // 2. Mise en forme.
+  const arrow = e => e.flag === '+' ? ' ↑' : (e.flag === '-' ? ' ↓' : '');
+  const lines = [];
+  for (const block of blocks){
+    // Dates : en mode comparaison, une valeur unique n'est ni « entrée » ni « sortie » :
+    // elle n'entre dans aucun des deux plans de dates et porte toujours sa date.
+    const dated = compare ? block.rows.filter(r => !r.single) : block.rows;
+    const planA = planDates(dated.map(r => r.a));
+    const planB = compare ? planDates(dated.map(r => r.b)) : null;
+
+    let title = block.title;
+    if (o.dates){
+      const headers = compare ? [planA.header, planB.header] : [planA.header];
+      const unique = headers.filter((h, i) => h && headers.indexOf(h) === i);
+      if (unique.length) title += ` (${unique.join(' → ')})`;
+    }
+    if (lines.length) lines.push(''); // ligne vide entre blocs
+    lines.push(title);
+
+    for (const r of block.rows){
+      const unit = r.item.unit ? ' ' + r.item.unit : '';
+      const tagA = o.dates && planA.tags.get(r.a) ? ` [${planA.tags.get(r.a)}]` : '';
+      let text;
+      if (!compare){
+        text = `${r.a.value}${unit}${arrow(r.a)}${tagA}`;
+      } else if (r.single){
+        text = `${r.a.value}${unit}${arrow(r.a)} [${r.a.date}]`;
+      } else {
+        const tagB = o.dates && planB.tags.get(r.b) ? ` [${planB.tags.get(r.b)}]` : '';
+        text = `${r.a.value}${arrow(r.a)}${tagA} → ${r.b.value}${arrow(r.b)}${tagB}${unit}${o.delta ? deltaText(r.a.value, r.b.value) : ''}`;
+      }
+      const ref = (r.b || r.a).ref;
+      lines.push(`- ${displayLabel(r.item)} : ${text}${o.norms && ref ? ` (N : ${ref})` : ''}`);
+    }
+  }
   document.getElementById('list-output').value = lines.join('\n');
 }
 
+/** Affiche les réglages propres à chaque mode (une date / comparaison). */
+function syncListMode(){
+  const compare = document.getElementById('list-mode').value === 'compare';
+  for (const id of ['wrap-ref-single', 'wrap-maxage']) document.getElementById(id).classList.toggle('hidden', compare);
+  for (const id of ['wrap-from', 'wrap-to', 'wrap-compare-opts']) document.getElementById(id).classList.toggle('hidden', !compare);
+}
+
+
 /* ============================================================================
-   GESTION TEMPLATE
+   11. MODÈLES, ALIAS ET ORDRES PARTAGÉS (Supabase)
    ============================================================================ */
+
+// ---- Modèles de résumé -----------------------------------------------------
+
 // 1. Récupérer tous les templates
 async function fetchTemplates() {
   const { data, error } = await supabaseClient
@@ -748,9 +1688,9 @@ async function fetchTemplates() {
   return data;
 }
 
-// 2. Sauvegarder un nouveau template (ou écraser l'existant)
+// 2. Sauvegarder un nouveau template
 async function saveTemplate(title, content, isDefault = false, author = 'Anonyme') {
-  const { data, error } = await supabaseClient
+  const { error } = await supabaseClient
     .from('templates')
     .insert([
       { title, content, is_default: isDefault, author }
@@ -774,9 +1714,24 @@ async function setAsDefaultTemplate(templateId, status) {
   if (error) console.error("Erreur de mise à jour :", error);
 }
 
-/* ============================================================================
-   GESTION ALIAS
-   ============================================================================ */
+async function initPresetDropdown() {
+  const select = document.getElementById('select-preset');
+  if (!select) return;
+
+  const templates = await fetchTemplates();
+
+  select.innerHTML = '<option value="">-- Charger un modèle --</option>';
+
+  templates.forEach(tpl => {
+    const opt = document.createElement('option');
+    opt.value = tpl.id;
+    opt.textContent = `${tpl.is_default ? '⭐ ' : ''}${tpl.title} (${tpl.author || 'Anonyme'})`;
+    opt.dataset.content = tpl.content;
+    select.appendChild(opt);
+  });
+}
+
+// ---- Alias de libellés -----------------------------------------------------
 
 // 1. Charger tous les alias partagés, fusionnés avec le filet intégré.
 async function fetchLabelAliases() {
@@ -811,35 +1766,186 @@ async function addLabelAlias(canonical, variant) {
   }
 }
 
-/* ============================================================================
-   INTERFACE & SUPABASE PRESETS
-   ============================================================================ */
+// ---- Ordres d'affichage partagés (table `layouts` : id, title, content, is_default, author) ----
 
-// 1. Déclaration de la fonction
-async function initPresetDropdown() {
-  const select = document.getElementById('select-preset');
+async function fetchLayouts() {
+  const { data, error } = await supabaseClient
+    .from('layouts')
+    .select('*')
+    .order('is_default', { ascending: false })
+    .order('title', { ascending: true });
+
+  if (error) {
+    console.error("Erreur de chargement des ordres d'affichage :", error);
+    return []; // table absente ou inaccessible : l'ordre local continue de fonctionner
+  }
+  return data;
+}
+
+async function saveLayout(title, content, isDefault = false, author = 'Anonyme') {
+  const { error } = await supabaseClient
+    .from('layouts')
+    .insert([{ title, content, is_default: isDefault, author }])
+    .select();
+
+  if (error) alert("Erreur lors de la sauvegarde de l'ordre : " + error.message);
+  else alert("Ordre d'affichage partagé.");
+}
+
+async function initLayoutDropdown() {
+  const select = document.getElementById('select-layout');
   if (!select) return;
-  
-  const templates = await fetchTemplates();
-
-  select.innerHTML = '<option value="">-- Charger un modèle --</option>';
-  
-  templates.forEach(tpl => {
+  const layouts = await fetchLayouts();
+  select.innerHTML = '<option value="">-- Ordres partagés --</option>';
+  layouts.forEach(l => {
     const opt = document.createElement('option');
-    opt.value = tpl.id;
-    opt.textContent = `${tpl.is_default ? '⭐ ' : ''}${tpl.title} (${tpl.author || 'Anonyme'})`;
-    opt.dataset.content = tpl.content;
+    opt.value = l.id;
+    opt.textContent = `${l.is_default ? '⭐ ' : ''}${l.title} (${l.author || 'Anonyme'})`;
+    opt.dataset.content = l.content;
     select.appendChild(opt);
   });
 }
 
-// 2. Initialisation au chargement de la page
-window.addEventListener('DOMContentLoaded', () => {
-  initPresetDropdown();
-  fetchLabelAliases();
+
+/* ============================================================================
+   12. EXPORTS
+   ============================================================================ */
+
+function exportCSV(){
+  const dates = orderedDateKeys();
+  const items = visibleItems();
+  const rows = [['Bloc', 'Rubrique', 'Sous-rubrique', 'Examen', "Libellé(s) d'origine", 'Unité', 'Référence', ...dates]];
+  for (const item of items){
+    const ref = [...item.values.values()].find(v => v.ref)?.ref || '';
+    rows.push([item.groupTitle, item.section, item.sub, item.label, [...new Set(item.rawLabels)].join(' | '), item.unit, ref,
+      ...dates.map(d => item.values.get(d)?.value ?? '')]);
+  }
+  const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(';')).join('\n');
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'bilan_biologique.csv';
+  a.click();
+}
+
+function copyTableAsTSV(){
+  const dates = orderedDateKeys();
+  const items = visibleItems();
+  const rows = [['Examen', ...dates]];
+  for (const item of items) rows.push([displayLabel(item), ...dates.map(d => item.values.get(d)?.value ?? '')]);
+  const tsv = rows.map(r => r.join('\t')).join('\n');
+  navigator.clipboard.writeText(tsv);
+}
+
+
+/* ============================================================================
+   13. INTERFACE
+   ============================================================================ */
+
+const DEFAULT_TEMPLATE =
+`NFS :
+Absence de troubles de la coagulation
+Ionogramme sanguin et bilan hépatique dans les normes
+Créatinine à {{Créatinine|valeur}} µmol/L soit DFG à {{DFG calculé par CKD-EPI|valeur}} mL/min
+Absence de syndrome inflammatoire biologique
+CPK dans les normes`;
+
+// Point d'entrée commun aux deux voies d'extraction (texte collé, fichier
+// HTML importé). Remplace systématiquement PARSED en entier plutôt que de
+// fusionner avec un résultat précédent.
+function applyParsedResult(parsed){
+  PARSED = { ...parsed };
+  rebuildItems();
+
+  document.getElementById('result-area').style.display = 'block';
+  buildRefDateSelect('ref-date');
+  buildRefDateSelect('ref-date-list');
+  buildRefDateSelect('date-from-list', true); // « entrée » : par défaut la plus ancienne
+  buildRefDateSelect('date-to-list');         // « sortie » : par défaut la plus récente
+  syncListMode();
+  renderAll();
+  showLayoutStatus(parseLayout(document.getElementById('layout-area').value).ignored);
+
+  if (!document.getElementById('template-area').value.trim()){
+    document.getElementById('template-area').value = DEFAULT_TEMPLATE;
+  }
+}
+
+// ---- Analyse -----------------------------------------------------------------
+document.getElementById('btn-parse').addEventListener('click', () => {
+  const text = document.getElementById('raw-input').value;
+  if (!text.trim()) return;
+  applyParsedResult(parseReport(text));
 });
 
-// 3. Écouteurs d'événements
+document.getElementById('html-input').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try { applyParsedResult(parseOrbisHtmlExport(reader.result)); }
+    catch (err){ console.error(err); alert("Échec de l'analyse du fichier HTML : " + err.message); }
+  };
+  reader.readAsText(file);
+  e.target.value = ''; // permet de réimporter le même fichier deux fois de suite
+});
+
+// ---- Options d'affichage -------------------------------------------------------
+document.getElementById('chk-technical').addEventListener('change', () => { if (PARSED) renderAll(); });
+document.getElementById('chk-merge').addEventListener('change', () => { if (PARSED){ rebuildItems(); renderAll(); } });
+document.getElementById('chk-order').addEventListener('change', () => { if (PARSED) buildTable(); });
+document.getElementById('search').addEventListener('input', () => { if (PARSED) buildTable(); });
+document.getElementById('search-insert').addEventListener('input', () => { if (PARSED) buildInsertList(); });
+
+// ---- Exports -----------------------------------------------------------------------
+document.getElementById('btn-csv').addEventListener('click', exportCSV);
+document.getElementById('btn-copy-table').addEventListener('click', copyTableAsTSV);
+
+// ---- Résumé ---------------------------------------------------------------------------
+document.getElementById('btn-generate').addEventListener('click', generateSummary);
+document.getElementById('btn-copy-summary').addEventListener('click', () => navigator.clipboard.writeText(document.getElementById('summary-output').value));
+
+// ---- Liste compacte -----------------------------------------------------------------
+for (const id of ['search-list', 'list-max-age'])
+  document.getElementById(id).addEventListener('input', () => { if (PARSED) buildCompactList(); });
+for (const id of ['ref-date-list', 'date-from-list', 'date-to-list', 'chk-list-norms', 'chk-list-dates', 'chk-list-changed', 'chk-list-delta'])
+  document.getElementById(id).addEventListener('change', () => { if (PARSED) buildCompactList(); });
+document.getElementById('list-mode').addEventListener('change', () => { syncListMode(); if (PARSED) buildCompactList(); });
+document.getElementById('btn-copy-list').addEventListener('click', () => navigator.clipboard.writeText(document.getElementById('list-output').value));
+
+// ---- Ordre d'affichage personnalisé ----------------------------------------------
+document.getElementById('btn-layout-apply').addEventListener('click', () => applyLayoutText(document.getElementById('layout-area').value));
+document.getElementById('btn-layout-example').addEventListener('click', () => { document.getElementById('layout-area').value = EXAMPLE_LAYOUT; });
+document.getElementById('btn-layout-clear').addEventListener('click', () => {
+  document.getElementById('layout-area').value = '';
+  applyLayoutText(''); // texte vide = ordre du laboratoire
+});
+document.getElementById('select-layout').addEventListener('change', (e) => {
+  const opt = e.target.options[e.target.selectedIndex];
+  if (opt && opt.dataset.content) document.getElementById('layout-area').value = opt.dataset.content;
+});
+document.getElementById('btn-layout-share').addEventListener('click', async () => {
+  const content = document.getElementById('layout-area').value;
+  if (!content.trim()) return alert("L'ordre est vide.");
+  const title = prompt("Titre de cet ordre :", "Mon ordre");
+  if (!title) return;
+  await saveLayout(title, content, confirm("Définir comme ordre par défaut pour tout le monde ?"));
+  await initLayoutDropdown();
+});
+
+// ---- Modèles et alias (Supabase) -----------------------------------------------------
+window.addEventListener('DOMContentLoaded', () => {
+  initPresetDropdown();
+  initLayoutDropdown();
+  fetchLabelAliases();
+
+  // Ordre mémorisé sur ce poste : rechargé et appliqué dès l'ouverture.
+  let saved = '';
+  try { saved = localStorage.getItem(LAYOUT_STORAGE_KEY) || ''; } catch (e) { /* stockage indisponible */ }
+  document.getElementById('layout-area').value = saved;
+  LAYOUT = parseLayout(saved).groups;
+});
+
 document.getElementById('select-preset')?.addEventListener('change', (e) => {
   const selectedOpt = e.target.options[e.target.selectedIndex];
   if (selectedOpt && selectedOpt.dataset.content) {
@@ -860,90 +1966,6 @@ document.getElementById('btn-save-cloud')?.addEventListener('click', async () =>
   await initPresetDropdown(); // Rafraîchit le menu
 });
 
-/* ============================================================================
-   EXPORT
-   ============================================================================ */
-
-function exportCSV(){
-  const dates = orderedDateKeys();
-  const exams = visibleExams();
-  const rows = [['Rubrique', 'Sous-rubrique', 'Examen', 'Unité', 'Référence', ...dates]];
-  for (const data of exams){
-    const unit = [...data.values.values()].find(v => v.unit)?.unit || '';
-    const ref = [...data.values.values()].find(v => v.ref)?.ref || '';
-    rows.push([data.section, data.sub, data.label, unit, ref, ...dates.map(d => data.values.get(d)?.value ?? '')]);
-  }
-  const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(';')).join('\n');
-  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'bilan_biologique.csv';
-  a.click();
-}
-
-function copyTableAsTSV(){
-  const dates = orderedDateKeys();
-  const exams = visibleExams();
-  const rows = [['Examen', ...dates]];
-  for (const data of exams) rows.push([data.label, ...dates.map(d => data.values.get(d)?.value ?? '')]);
-  const tsv = rows.map(r => r.join('\t')).join('\n');
-  navigator.clipboard.writeText(tsv);
-}
-
-/* ============================================================================
-   INTERFACE
-   ============================================================================ */
-
-// Point d'entrée commun aux deux voies d'extraction (texte collé, fichier
-// HTML importé). Remplace systématiquement PARSED en entier plutôt que de
-// fusionner avec un résultat précédent — même logique que le bouton Analyser
-// avait déjà avant l'import HTML, gardée volontairement simple pour l'instant.
-function applyParsedResult(parsed){
-  PARSED = parsed;
-  document.getElementById('result-area').style.display = 'block';
-  document.getElementById('stats').textContent =
-    `${PARSED.exams.size} examens distincts, ${PARSED.dateKeys.length} prélèvements datés.`;
-  buildTable();
-  buildInsertList();
-  buildRefDateSelect('ref-date');
-  buildRefDateSelect('ref-date-list');
-  buildCompactList();
-
-  if (!document.getElementById('template-area').value.trim()){
-    document.getElementById('template-area').value =
-`NFS :
-Absence de troubles de la coagulation
-Ionogramme sanguin et bilan hépatique dans les normes
-Créatinine à {{Créatinine|valeur}} µmol/L soit DFG à {{DFG calculé par CKD-EPI|valeur}} mL/min
-Absence de syndrome inflammatoire biologique
-CPK dans les normes`;
-  }
-}
-
-document.getElementById('btn-parse').addEventListener('click', () => {
-  const text = document.getElementById('raw-input').value;
-  if (!text.trim()) return;
-  applyParsedResult(parseReport(text));
-});
-
-document.getElementById('html-input').addEventListener('change', (e) => {
-  const file = e.target.files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = () => applyParsedResult(parseOrbisHtmlExport(reader.result));
-  reader.readAsText(file);
-  e.target.value = ''; // permet de réimporter le même fichier deux fois de suite
-});
-
-document.getElementById('chk-technical').addEventListener('change', () => { if (PARSED) buildTable(); });
-document.getElementById('chk-order').addEventListener('change', () => { if (PARSED) buildTable(); });
-document.getElementById('search').addEventListener('input', () => { if (PARSED) buildTable(); });
-document.getElementById('search-insert').addEventListener('input', () => { if (PARSED) buildInsertList(); });
-document.getElementById('btn-csv').addEventListener('click', exportCSV);
-document.getElementById('btn-copy-table').addEventListener('click', copyTableAsTSV);
-document.getElementById('btn-generate').addEventListener('click', generateSummary);
-document.getElementById('btn-copy-summary').addEventListener('click', () => navigator.clipboard.writeText(document.getElementById('summary-output').value));
-
 document.getElementById('btn-add-alias')?.addEventListener('click', async () => {
   const variant = prompt('Libellé exact rencontré dans un compte-rendu (la variante) :');
   if (!variant) return;
@@ -952,12 +1974,7 @@ document.getElementById('btn-add-alias')?.addEventListener('click', async () => 
   await addLabelAlias(canonical.trim(), variant.trim());
 });
 
-document.getElementById('search-list').addEventListener('input', () => { if (PARSED) buildCompactList(); });
-document.getElementById('ref-date-list').addEventListener('change', () => { if (PARSED) buildCompactList(); });
-document.getElementById('chk-list-norms').addEventListener('change', () => { if (PARSED) buildCompactList(); });
-document.getElementById('btn-copy-list').addEventListener('click', () => navigator.clipboard.writeText(document.getElementById('list-output').value));
-
-// Bascule entre les trois onglets (Tableau / Liste / Résumé).
+// ---- Onglets (Tableau / Liste / Résumé) ----------------------------------------------
 const TABS = [
   { btn: 'tab-btn-table', panel: 'tab-table' },
   { btn: 'tab-btn-list', panel: 'tab-list' },
